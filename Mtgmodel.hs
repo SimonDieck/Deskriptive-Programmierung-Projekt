@@ -4,10 +4,11 @@ import Prelude
 
 
 --Recources
-data Mana = Red | Green | White | Blue | Black | Colourless
+data Mana = Red | Green | White | Blue | Black | Colourless deriving (Eq)
 
-newtype Manapool = Pool [Mana]
+newtype Manapool = Pool [(Int,Mana)]
 
+--costs are aved as negative numbers
 newtype Manacost = MCost [(Int, Mana)]
 
 newtype Library = Lib [Card]
@@ -80,17 +81,22 @@ data Effect = Effect [Action] [Trigger] [AltProcedure]
 
 --Functions modelling change in the model
 
+
 ownerSide :: Player -> Side -> Bool
 ownerSide p (Side pl _ _ _ _ _ _ _) = p == pl
+
 
 checkCard :: CardId -> Card -> Bool
 checkCard i (Card id _ _ _ _ _ _ _ _ _ _) = id == i 
 
+
 manipulateResource :: Player -> (Side -> Side) -> Gamestate -> Gamestate
 manipulateResource pl r (Gamestate s t p pr) = Gamestate (map r (filter (ownerSide pl) s)) t p pr
 
+-- important function which will be used with the parser
 changeLife :: Int -> Side -> Side
 changeLife c (Side pl lib g b h e m (Life l)) = Side pl lib g b h e m (Life (l+c))
+
 
 addToZone :: Zone -> (Card, Side) -> Side
 addToZone z (c, (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l)) = 
@@ -101,6 +107,7 @@ addToZone z (c, (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l)) =
   ZHand        -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand (c:h)) (Exile e) m l
   ZExile       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile (c:e)) m l
 
+  
 removeFromZone :: CardId -> Zone -> Side -> (Card,Side)
 removeFromZone ci z (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = 
  case z of
@@ -110,6 +117,33 @@ removeFromZone ci z (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l
   ZHand        -> ((head (filter (checkCard ci) h)), Side pl (Lib  lib) (Grave g) (Btlf b) (Hand (filter (not.checkCard ci) h)) (Exile e) m l)
   ZExile       -> ((head (filter (checkCard ci) e)), Side pl (Lib  lib) (Grave g) (Btlf b) (Hand h) (Exile (filter (not.checkCard ci) e)) m l)
 
+  
+-- important function which will be used with the parser
 changeZone :: CardId -> Zone -> Zone -> Side -> Side
 changeZone cid zi zii = (addToZone zi).(removeFromZone cid zi)
+
+fromPool :: Manapool -> [Mana]
+fromPool (Pool m) = m
+
+checkMana :: Mana -> Manapool -> Int
+checkMana m (Pool [])         = 0
+checkMana m (Pool ((x,y):xs)) = if m == y then x else checkMana m (Pool xs)
+
+
+removeMana :: Mana -> Manapool -> Manapool
+removeMana _ (Pool []) = Pool []
+removeMana m (Pool (x,y):xs) = if m == y then Pool xs else (Pool (x,y) : (fromPool (removeMana m xs)))
+
+
+manipulateMana :: (Int,Mana) -> Manapool -> Manapool
+manipulateMana (i,m) p = let j = checkMana m p in Pool ((i+j,m): fromPool (removeMana m p))
+
+
+checkManaCost :: Manacost -> Manapool -> Bool
+checkManaCost (MCost c) p = let (a,b) = unzip c in foldr (&&.(\(i,j) -> (-i) <= j)) True (zip a (map checkMana b))
+
+--Side Manipulation will check if Enough Mana is present but must be modelled together with Addcost
+payManaCost :: Manacost -> Manapool -> Manapool
+payManaCost (MCost []) p = p 
+payManaCost (MCost (x:xs)) p = payManaCost (MCost xs) (manipulateMana x p)
 
