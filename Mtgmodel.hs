@@ -63,7 +63,7 @@ data Scope a = Scope (a -> Bool)
 
 data Resource = RLibrary | RGraveyard | RBattlefield | RHand | RExile | RStack | RManapool | RLife
 
-data Cost = Cost [(Scope Resource, Resource)]
+data Cost = Cost (Side -> Bool) [(Side -> Side)]
 
 --Actions have IDs so Triggers can be called
 data Action = Action (Resource -> Resource) Player Int | Procedure
@@ -208,5 +208,42 @@ affectZoneChange scp zi zii (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exil
   ZExile       -> foldr (changeZone zii zi) s (map getCardId (filter scp e))
 
 
+--checks if there are x cards in zone z which fulfill condition scp
+checkAmountZone :: Int -> Zone -> (Card -> Bool) -> Side -> Bool
+checkAmountZone x z scp (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _) = 
+ case z of
+  ZLibrary     -> x <= (length (filter scp lib))
+  ZGraveyard   -> x <= (length (filter scp g))
+  ZBattlefield -> x <= (length (filter scp b))
+  ZHand        -> x <= (length (filter scp h))
+  ZExile       -> x <= (length (filter scp e))
 
 
+--combined with getXpossibleCards allows to create a scope which only allows a certain number of cards to be affected by another scope
+xCardScope :: [CardId] -> (Card -> Bool)
+xCardScope flt = \c -> findA (getCardId c) flt
+
+
+getXpossibleCards :: Int -> Zone -> (Card -> Bool) -> Side -> [CardId]
+getXpossibleCards x z scp (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = let s = (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) in
+ if checkAmountZone x z scp s then
+    case z of
+        ZLibrary     -> map getCardId (take x (filter scp lib))
+        ZGraveyard   -> map getCardId (take x (filter scp g))
+        ZBattlefield -> map getCardId (take x (filter scp b))
+        ZHand        -> map getCardId (take x (filter scp h))
+        ZExile       -> map getCardId (take x (filter scp e))
+ else []
+
+
+applyAll :: [(a -> a)] -> a -> a
+applyAll [] v = v
+applyAll (x : xs) v = applyAll xs (x v)
+ 
+
+payaddCost :: Cost -> Side -> Side
+payaddCost (Cost _ chngs) s = applyAll chngs s
+
+--Main method for paying costs but still need binding functions for casting and activating abilities which will also check the cost and afterwards apply all effects
+payCost :: Manacost -> Cost -> Side -> Side
+payCost mc c s = let Side pl lib g b h e m l = payaddCost c s in Side pl lib g b h e (payManaCost mc m) l
