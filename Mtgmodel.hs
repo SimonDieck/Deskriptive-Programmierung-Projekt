@@ -41,16 +41,16 @@ newtype Cardname = Cardname String deriving (Eq)
 
 newtype CardId = CardId (Int, Cardname) deriving (Eq)
 
-data Cardtype = Instant | Sorcery | Creature | Enchantment | Artifact | Planeswalker | Land | Legendary | Token
+data Cardtype = Instant | Sorcery | Creature | Enchantment | Artifact | Planeswalker | Land | Legendary Cardtype | Token deriving (Eq)
 
-data Subtype = Creaturetype | Mountain | Forest | Plains | Island | Swamp | Aura | Equipment
+data Subtype = Creaturetype | Mountain | Forest | Plains | Island | Swamp | Aura | Equipment deriving (Eq)
 
-newtype Creaturetype = CreatureType String
+newtype Creaturetype = CreatureType String deriving (Eq)
 
 newtype PowerToughness = PT (Maybe (Int, Int))
 
---               Id     Name     Type     Subtype Power/ Toughness  Cost     Additional Cost  Effect Owner   Damage Untapped = True
-data Card = Card CardId Cardname Cardtype Subtype PowerToughness    Manacost Cost             Effect Player  Int    Bool
+--               Id     Name     Type       Subtype   Power/ Toughness  Cost     Additional Cost  Effect Owner   Damage Untapped = True
+data Card = Card CardId Cardname [Cardtype] [Subtype] PowerToughness    Manacost Cost             Effect Player  Int    Bool
 
 
 --Gamestate
@@ -119,31 +119,94 @@ removeFromZone ci z (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l
 
   
 -- important function which will be used with the parser
-changeZone :: CardId -> Zone -> Zone -> Side -> Side
-changeZone cid zi zii = (addToZone zi).(removeFromZone cid zi)
+changeZone :: Zone -> Zone -> CardId -> Side -> Side
+changeZone zi zii cid = (addToZone zi).(removeFromZone cid zi)
 
-fromPool :: Manapool -> [Mana]
+fromPool :: Manapool -> [(Int,Mana)]
 fromPool (Pool m) = m
 
-checkMana :: Mana -> Manapool -> Int
-checkMana m (Pool [])         = 0
-checkMana m (Pool ((x,y):xs)) = if m == y then x else checkMana m (Pool xs)
+checkMana :: Manapool -> Mana -> Int
+checkMana (Pool [])   m       = 0
+checkMana (Pool ((x,y):xs)) m = if m == y then x else checkMana (Pool xs) m
 
 
 removeMana :: Mana -> Manapool -> Manapool
 removeMana _ (Pool []) = Pool []
-removeMana m (Pool (x,y):xs) = if m == y then Pool xs else (Pool (x,y) : (fromPool (removeMana m xs)))
+removeMana m (Pool ((x,y):xs)) = if m == y then Pool xs else (Pool ((x,y) : (fromPool (removeMana m (Pool xs)))))
 
 
 manipulateMana :: (Int,Mana) -> Manapool -> Manapool
-manipulateMana (i,m) p = let j = checkMana m p in Pool ((i+j,m): fromPool (removeMana m p))
+manipulateMana (i,m) p = let j = checkMana p m in Pool ((i+j,m): fromPool (removeMana m p))
 
 
 checkManaCost :: Manacost -> Manapool -> Bool
-checkManaCost (MCost c) p = let (a,b) = unzip c in foldr (&&.(\(i,j) -> (-i) <= j)) True (zip a (map checkMana b))
+checkManaCost (MCost c) p = let (a,b) = unzip c in foldr (\(i,j) r ->r && (-i) <= j) True (zip a (map (checkMana p) b))
 
 --Side Manipulation will check if Enough Mana is present but must be modelled together with Addcost
 payManaCost :: Manacost -> Manapool -> Manapool
 payManaCost (MCost []) p = p 
 payManaCost (MCost (x:xs)) p = payManaCost (MCost xs) (manipulateMana x p)
+
+
+
+--Functions for Cardmanipulation
+--True = untap false = tap
+tapuntap :: Bool -> Card -> Card
+tapuntap t (Card id n tp s pt c ac e o d _) = Card id n tp s pt c ac e o d t
+
+
+checkUntap :: Card -> Bool
+checkUntap (Card _ _ _ _ _ _ _ _ _ _ t) = t
+
+
+getCardId :: Card -> CardId
+getCardId (Card id _ _ _ _ _ _ _ _ _ _) = id
+
+
+checkType :: Cardtype -> Card -> Bool
+checkType ct (Card _ _ (x:xs) _ _ _ _ _ _ _ _) = if x == ct then True else findA ct xs
+
+
+findA :: Eq a => a -> [a] -> Bool
+findA x [] = False
+findA x (y:ys) = if x == y then True else findA x ys
+
+
+checkSubType :: Subtype -> Card -> Bool
+checkSubType ct (Card _ _ _ (x:xs) _ _ _ _ _ _ _ ) = if x == ct then True else findA ct xs
+
+
+copyCard :: Card -> Card
+copyCard (Card (CardId (i,nm)) n tp s pt c ac e o d t) = Card (CardId (i+1,nm)) n tp s pt c ac e o d t
+
+
+allAccept :: a -> Bool
+allAccept _ = True
+
+
+affectCards :: (Card -> Bool) -> (Card -> Card) -> [Card] -> [Card]
+affectCards scp efct c = map efct (filter scp c)
+
+--two functions used for affecting a bunch of cards at once
+affectInZone :: Zone -> (Card -> Bool) -> (Card -> Card) -> Side -> Side
+affectInZone z scp efct (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = 
+ case z of
+  ZLibrary     -> Side pl (Lib (affectCards scp efct lib)) (Grave g) (Btlf b) (Hand h) (Exile e) m l
+  ZGraveyard   -> Side pl (Lib lib) (Grave (affectCards scp efct g)) (Btlf b) (Hand h) (Exile e) m l
+  ZBattlefield -> Side pl (Lib lib) (Grave g) (Btlf (affectCards scp efct b)) (Hand h) (Exile e) m l
+  ZHand        -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand (affectCards scp efct h)) (Exile e) m l
+  ZExile       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile (affectCards scp efct e)) m l
+
+
+affectZoneChange :: (Card -> Bool) -> Zone -> Zone -> Side -> Side
+affectZoneChange scp zi zii (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = let s = (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) in
+ case zi of
+  ZLibrary     -> foldr (changeZone zii zi) s (map getCardId (filter scp lib))
+  ZGraveyard   -> foldr (changeZone zii zi) s (map getCardId (filter scp g))
+  ZBattlefield -> foldr (changeZone zii zi) s (map getCardId (filter scp b))
+  ZHand        -> foldr (changeZone zii zi) s (map getCardId (filter scp h))
+  ZExile       -> foldr (changeZone zii zi) s (map getCardId (filter scp e))
+
+
+
 
