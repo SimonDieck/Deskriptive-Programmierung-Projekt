@@ -31,7 +31,7 @@ data Side = Side Player Library Graveyard Battlefield Hand Exile Manapool Life
 
 
 --Gameprocedure related
-data Phase = Untap | Upkeep | Draw | FirstMain | DeclareAttackers | DeclareBlockers | ResolveCombat | SecondMain | Endstep deriving (Enum, Bounded)
+data Phase = UntapPhase | Upkeep | Draw | FirstMain | DeclareAttackers | DeclareBlockers | ResolveCombat | SecondMain | Endstep deriving (Enum, Bounded)
 
 newtype Player = Id Int deriving (Eq)
 
@@ -49,8 +49,16 @@ newtype Creaturetype = CreatureType String deriving (Eq)
 
 newtype PowerToughness = PT (Maybe (Int, Int))
 
---               Id     Name     Type       Subtype   Power/ Toughness  Cost     Additional Cost  Effect Owner   Damage Untapped = True
-data Card = Card CardId Cardname [Cardtype] [Subtype] PowerToughness    Manacost Cost             Effect Player  Int    Bool
+--all static abilitys that can occur in m2010 and are abilites that cause alternate procedures and can be requested by other cards. Full List here: http://mtgsalvation.gamepedia.com/Evergreen
+data Keyword = Deathtouch | Defender | DoubleStrike | FirstStrike | Flash | Flying | Haste | Hexproof | Indestructible | Lifelink | Menace | Reach | Trample | Vigilance | Fear | Shroud | Intimidate
+
+--Possible events that can be asked by triggers. Listed undet Actions at: http://mtgsalvation.gamepedia.com/Evergreen
+data Event = Activate | Attach | Cast | Counter | Destroy | Discard | Exchange | ExileCard | Fight | Play | Regenerate | Reveal | Sacrifice | Scry | Search | Shuffle | Tap | Untap
+
+data Change = Change CardId (Card -> Card)
+
+--               Id     Name     Type       Subtype   Power/ Toughness  Cost     Additional Cost  Effect Owner   Damage Untapped = True  Active Changes affecting the card  Keywords
+data Card = Card CardId Cardname [Cardtype] [Subtype] PowerToughness    Manacost Cost             Effect Player  Int    Bool             [Change]                           [Keyword]  Trigger
 
 
 --Gamestate
@@ -66,10 +74,10 @@ data Resource = RLibrary | RGraveyard | RBattlefield | RHand | RExile | RStack |
 data Cost = Cost (Side -> Bool) [(Side -> Side)]
 
 --Actions have IDs so Triggers can be called
-data Action = Action (Resource -> Resource) Player Int | Procedure
+data Action = Action (Side -> Side) Player | Procedure
 
 --                      Trigger        Consequence OneTime or Permanent Origin
-data Trigger = Trigger (Scope Action)  Action      Bool                 CardId
+data Trigger = Trigger  Event          Action      Bool                 CardId
 
 type Procedure = (Gamestate -> Gamestate)
 
@@ -87,7 +95,7 @@ ownerSide p (Side pl _ _ _ _ _ _ _) = p == pl
 
 
 checkCard :: CardId -> Card -> Bool
-checkCard i (Card id _ _ _ _ _ _ _ _ _ _) = id == i 
+checkCard i (Card id _ _ _ _ _ _ _ _ _ _ _ _ _) = id == i 
 
 
 manipulateResource :: Player -> (Side -> Side) -> Gamestate -> Gamestate
@@ -152,19 +160,19 @@ payManaCost (MCost (x:xs)) p = payManaCost (MCost xs) (manipulateMana x p)
 --Functions for Cardmanipulation
 --True = untap false = tap
 tapuntap :: Bool -> Card -> Card
-tapuntap t (Card id n tp s pt c ac e o d _) = Card id n tp s pt c ac e o d t
+tapuntap t (Card id n tp s pt c ac e o d _ chng k tr) = Card id n tp s pt c ac e o d t chng k tr
 
 
 checkUntap :: Card -> Bool
-checkUntap (Card _ _ _ _ _ _ _ _ _ _ t) = t
+checkUntap (Card _ _ _ _ _ _ _ _ _ _ t _ _ _) = t
 
 
 getCardId :: Card -> CardId
-getCardId (Card id _ _ _ _ _ _ _ _ _ _) = id
+getCardId (Card id _ _ _ _ _ _ _ _ _ _ _ _ _) = id
 
 
 checkType :: Cardtype -> Card -> Bool
-checkType ct (Card _ _ (x:xs) _ _ _ _ _ _ _ _) = if x == ct then True else findA ct xs
+checkType ct (Card _ _ (x:xs) _ _ _ _ _ _ _ _ _ _ _) = if x == ct then True else findA ct xs
 
 
 findA :: Eq a => a -> [a] -> Bool
@@ -173,11 +181,21 @@ findA x (y:ys) = if x == y then True else findA x ys
 
 
 checkSubType :: Subtype -> Card -> Bool
-checkSubType ct (Card _ _ _ (x:xs) _ _ _ _ _ _ _ ) = if x == ct then True else findA ct xs
+checkSubType ct (Card _ _ _ (x:xs) _ _ _ _ _ _ _ _ _ _) = if x == ct then True else findA ct xs
 
 
 copyCard :: Card -> Card
-copyCard (Card (CardId (i,nm)) n tp s pt c ac e o d t) = Card (CardId (i+1,nm)) n tp s pt c ac e o d t
+copyCard (Card (CardId (i,nm)) n tp s pt c ac e o d t chng k tr) = Card (CardId (i+1,nm)) n tp s pt c ac e o d t chng k tr
+
+
+changePT :: (Either () CardId) -> (Int, Int) -> Card -> Card
+changePT i (a,b) (Card id n tp s pt c ac e o d t chng k tr) = case pt of
+                                                                PT Nothing           -> (Card id n tp s pt c ac e o d t chng k tr)
+                                                                PT (Just (pwr, tgh)) -> case i of
+                                                                                          Right ci -> let reverse = Change ci (changePT (Left ()) (-a,-b)) in 
+                                                                                                        (Card id n tp s (PT (Just (pwr+a,tgh+b))) c ac e o d t (reverse : chng) k tr)
+                                                                                          Left ()  -> (Card id n tp s (PT (Just (pwr+a,tgh+b))) c ac e o d t chng k tr)
+                                                                
 
 
 allAccept :: a -> Bool
