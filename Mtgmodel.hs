@@ -33,7 +33,7 @@ data Side = Side Player Library Graveyard Battlefield Hand Exile Manapool Life
 --Gameprocedure related
 data Phase = UntapPhase | Upkeep | Draw | FirstMain | DeclareAttackers | DeclareBlockers | ResolveCombat | SecondMain | Endstep deriving (Enum, Bounded, Eq)
 
-newtype Player = Id Int deriving (Eq)
+newtype Player = Id Int deriving (Eq, Show)
 
 
 -- Card related Identifiers
@@ -101,8 +101,8 @@ data Cost = Cost (Side -> Bool) [(Side -> Side)]
 
 data Action = Action Target Event (Maybe Int) (Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure)
 
---                      Trigger        Consequence OneTime or Permanent Origin Zone in which the Trigger will activate
-data Trigger = Trigger  Event          Action      Bool                 CardId Zone
+--                      Trigger        Consequence OneTime or Permanent Active   Origin Zone in which the Trigger will activate Scope to check if the Source satisfies certain conditions Owner of the Trigger
+data Trigger = Trigger  Event          Action      Bool                 Bool     CardId Zone                                    (Source -> Bool)                                          Player
 
 newtype Procedure = Procedure (Gamestate -> IO Gamestate)
 
@@ -127,8 +127,8 @@ checkCard :: CardId -> Card -> Bool
 checkCard i (Card id _ _ _ _ _ _ _ _ _ _ _ _ _) = id == i 
 
 
-checkTrigger :: Event -> Zone -> Trigger -> Bool
-checkTrigger e z (Trigger e' _ _ _ z') = e == e' && z == z'
+checkTrigger :: Source -> Event -> Zone -> Trigger -> Bool
+checkTrigger src e z (Trigger e' _ _ b _ z' scp _) = e == e' && z == z' && scp src && b
 
 
 affectedTriggers :: (Trigger -> Bool) -> Card -> [Trigger]
@@ -137,6 +137,18 @@ affectedTriggers scp (Card _ _ _ _ _ _ _ _ _ _ _ _ _ tr) = filter scp tr
 
 affectedTriggersZone :: (Trigger -> Bool) -> [Card] -> [Trigger]
 affectedTriggersZone scp s = concatMap (affectedTriggers scp) s
+
+
+identifyTrigger :: Event -> CardId -> Zone -> Player -> Trigger -> Bool
+identifyTrigger e i z o (Trigger e' _ _ _ i' z' _ o') = e == e' && i == i' && z == z' && o == o'
+
+
+removeTriggerFromCard :: Event -> CardId -> Zone -> Player -> Card -> Card
+removeTriggerFromCard ev i z ow (Card id n tp s pt c ac e o d t chng k tr) = Card id n tp s pt c ac e o d t chng k (filter (not.(identifyTrigger ev i z ow)) tr)
+
+
+removeTrigger :: Trigger -> Side -> Side
+removeTrigger (Trigger e _ _ _ i z _ o) s = affectInZone z (\c -> (getCardId c) == i) (removeTriggerFromCard e i z o) s
 
 
 dealDamage :: Int -> Card -> Card
@@ -148,8 +160,8 @@ checkLethal (Card _ _ _ _ (PT Nothing) _ _ _ _ d _ _ _ _)      = False
 checkLethal (Card _ _ _ _ (PT (Just (_,b))) _ _ _ _ d _ _ _ _) = b <= d
 
 
-allAffectedTriggers :: Event -> Side -> [Trigger]
-allAffectedTriggers ev (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _) = concatMap (\(i,j) -> affectedTriggersZone (checkTrigger ev i) j) (zip [ZLibrary, ZGraveyard, ZBattlefield, ZHand, ZExile] [lib, g, b, h, e])
+allAffectedTriggers :: Source -> Event -> Side -> [Trigger]
+allAffectedTriggers src ev (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _) = concatMap (\(i,j) -> affectedTriggersZone (checkTrigger src ev i) j) (zip [ZGraveyard, ZBattlefield, ZHand, ZExile] [g, b, h, e])
 
 
 manipulateResource :: Player -> (Side -> Side) -> Gamestate -> Gamestate
@@ -357,19 +369,20 @@ payCost mc c s = let Side pl lib g b h e m l = payaddCost c s in Side pl lib g b
 
 
 --Block of IO functions modelling the standard interactions and procedures of the game
-findTarget :: Gamestate -> Target -> IO (Either [CardId] [Player])
-findTarget (Gamestate s p ph pl all) t = case t of
-                                          Self                        -> return (Right [pl])
-                                          Opponent                    -> do x <- chooseOpponent pl all
-                                                                            return (Right [x])
-                                          ConditionalTarget c' zn' o' -> do y <- chooseCard c' zn' o' s
-                                                                            return (Left [y])
-                                          AllPlayer                   -> return (Right all)
-                                          ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn o s))
+findTarget :: Player -> Gamestate -> Target -> IO (Either [CardId] [Player])
+findTarget owner (Gamestate s p ph pl all) t = case t of
+                                               Self                        -> return (Right [pl])
+                                               Opponent                    -> do x <- chooseOpponent owner all
+                                                                                 return (Right [x])
+                                               ConditionalTarget c' zn' o' -> do y <- chooseCard owner c' zn' o' s
+                                                                                 return (Left [y])
+                                               AllPlayer                   -> return (Right all)
+                                               ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn o s))
                                           
                                           
 chooseOpponent :: Player -> [Player] -> IO Player
-chooseOpponent p all = do putStr "Choose Opponent: " 
+chooseOpponent p all = do putStr (show p)
+                          putStr "Choose Opponent: " 
                           x <- getLine
                           case filter ((\p' -> (p' == (parsePlayer x)) && (not (p' == p)))) all of
                             []  -> do putStr "Invalid Target"
@@ -377,13 +390,14 @@ chooseOpponent p all = do putStr "Choose Opponent: "
                             [z] -> return z
                                           
 
-chooseCard :: (Card -> Bool) -> (Zone -> Bool) -> (Player -> Bool) -> [Side] -> IO CardId
-chooseCard c zn o s = do putStr "Choose Card: "
-                         x <- getLine
-                         let crds = allCardsSatisfying c zn o s in
+chooseCard :: Player -> (Card -> Bool) -> (Zone -> Bool) -> (Player -> Bool) -> [Side] -> IO CardId
+chooseCard p c zn o s = do putStr (show p)
+                           putStr "Choose Card: "
+                           x <- getLine
+                           let crds = allCardsSatisfying c zn o s in
                              case filter (\c' -> c' == (parseCard x)) crds of
                                   []  -> do putStr "Invalid Target"
-                                            chooseCard c zn o s
+                                            chooseCard p c zn o s
                                   [z] -> return z
                              
 
@@ -400,21 +414,67 @@ applyProcedure :: Procedure -> Gamestate -> IO Gamestate
 applyProcedure (Procedure p) g = p g
            
 
-executeAction :: Source -> Action -> Gamestate -> IO Gamestate
-executeAction s (Action t e str a) (Gamestate s' p ph pl all) = let g = (Gamestate s' p ph pl all) in
-                                                                    do x   <- findTarget g t
-                                                                       let tr = concatMap (allAffectedTriggers e) (map (findSide g) all) in
-                                                                        do g'  <- applyProcedure (a s x str) g
-                                                                           g'' <- ioFold executeTrigger g' tr
-                                                                           return g''
+executeAction :: Player -> Source -> Action -> Gamestate -> IO Gamestate
+executeAction owner s (Action t e str a) (Gamestate s' p ph pl all) = let g = (Gamestate s' p ph pl all) in
+                                                                          do x   <- findTarget owner g t
+                                                                             let tr = concatMap (allAffectedTriggers s e) (map (findSide g) all) in
+                                                                                 do g'  <- applyProcedure (a s x str) g
+                                                                                    g'' <- ioFold executeTrigger g' tr
+                                                                                    return g''
                                                                  
                                       
 
 
 executeTrigger :: Trigger -> Gamestate -> IO Gamestate
-executeTrigger t g = undefined
+executeTrigger (Trigger e a b act i z scp p) g = let tr = (Trigger e a b act i z scp p) in
+                                                     if b && (not act)
+                                                      then executeAction p (CardSource i) a (manipulateResource p (removeTrigger tr) g)
+                                                      else executeAction p (CardSource i) a g
+                                              
                                       
-           
+
+
+cast :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+cast = undefined
+
+
+counter :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+counter = undefined
+
+
+changeZoneAction :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+changeZoneAction = undefined
+
+
+attack :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+attack = undefined
+
+
+block :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+block = undefined
+
+
+affectDamage :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+affectDamage = undefined
+
+
+affectTapUntap :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+affectTapUntap = undefined
+
+
+affectChange :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+affectChange = undefined
+
+
+reveal :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+reveal = undefined
+
+
+activateAbility :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+activateAbility = undefined
+
+
+                                      
 game :: IO ()
 game = do g <- initalize
           (while (not.checkWinner) turn) g
