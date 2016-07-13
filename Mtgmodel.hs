@@ -51,10 +51,10 @@ newtype Creaturetype = CreatureType String deriving (Eq)
 newtype PowerToughness = PT (Maybe (Int, Int))
 
 --all static abilitys that can occur in m2010 and are abilites that cause alternate procedures and can be requested by other cards. Full List here: http://mtgsalvation.gamepedia.com/Evergreen
-data Keyword = Deathtouch | Defender | DoubleStrike | FirstStrike | Flash | Flying | Haste | Hexproof | Indestructible | Lifelink | Menace | Reach | Trample | Vigilance | Fear | Shroud | Intimidate | Attacking | Blocking deriving (Eq)
+data Keyword = Keyword String deriving (Eq)
 
---Possible events that can be asked by triggers. Listed undet Actions at: http://mtgsalvation.gamepedia.com/Evergreen
-data Event = Activate | Attach | Cast | Counter | Destroy | Discard | Exchange | ExileCard | Fight | Play | Regenerate | Reveal | Sacrifice | Scry | Search | Shuffle | Tap | Untap deriving (Eq)
+--Possible events that can be asked by triggers. Listed under Actions at: http://mtgsalvation.gamepedia.com/Evergreen
+data Event = Event String deriving (Eq)
 
 data Change = Change CardId (Card -> Card)
 
@@ -63,7 +63,7 @@ data Card = Card CardId Cardname [Cardtype] [Subtype] PowerToughness    Manacost
 
 
 errorCard :: Card
-errorCard = Card (CardId ((-1), (Cardname "Error"))) (Cardname "Error") [] [] (PT (Nothing)) (MCost []) (Cost allAccept []) (Effect ()) (Id (-1)) 0 False [] [] []
+errorCard = Card (CardId ((-1), (Cardname "Error"))) (Cardname "Error") [] [] (PT (Nothing)) (MCost []) (Cost allAccept []) (Effect []) (Id (-1)) 0 False [] [] []
 
 
 --Gamestate
@@ -84,20 +84,47 @@ data Cost = Cost (Side -> Bool) [(Side -> Side)]
 
 data Action = Action Target Event (Maybe Int) (Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure) | ChainedAction [Action]
 
+newtype StandardAction = Descriptor String deriving (Eq)
+
+--used to active Triggers of certain events
+eventAction :: Event -> Action
+eventAction e = Action Self e Nothing emptyChange
+
 --                      Trigger        Consequence OneTime or Permanent Active   Origin Zone in which the Trigger will activate Scope to check if the Source satisfies certain conditions Owner of the Trigger
 data Trigger = Trigger  Event          Action      Bool                 Bool     CardId Zone                                    (Source -> Bool)                                          Player
 
 newtype Procedure = Procedure (Gamestate -> IO Gamestate)
 
-data Target = Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Bool)
+data Target = Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Bool) | ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
 
 data Source = CardSource CardId | PlayerInitiator Player
 
---currently Everything is coded via triggers, might go back on this
-data Effect = Effect ()
+--
+data Effect = Effect [(StandardAction, Action)] 
+
+--standardActions that get executed unless specified otherwise on a card
+
+standardAttack :: Action
+standardAttack = Action Opponent (Event "Attack") Nothing attack
+
+
+standardDeclareBlockers :: Action
+standardDeclareBlockers = Action (ConditionalOwnTarget (checkUntap) (checkZone ZBattlefield)) (Event "DeclareBlocker") Nothing block
 
 
 --Functions modelling change in the model
+checkZone :: Zone -> Zone -> Bool
+checkZone a b = a == b
+
+
+findAction :: StandardAction -> Card -> Action
+findAction desc (Card _ _ _ _ _ _ _ (Effect x) _ _ _ _ _ _) = findInEffect desc x
+
+
+findInEffect :: StandardAction -> [(StandardAction, Action)] -> Action
+findInEffect _ [] = eventAction (Event "ERROR")
+findInEffect desc ((a,b) : xs ) = if a == desc then b else findInEffect desc xs
+
 
 checkTrigger :: Source -> Event -> Zone -> Trigger -> Bool
 checkTrigger src e z (Trigger e' _ _ b _ z' scp _) = e == e' && z == z' && scp src && b
@@ -213,6 +240,9 @@ findCard :: CardId -> Zone -> Side -> Card
 findCard id z s = case filter (checkCard id) (allZonesSatisfying (\zb -> zb == z) s) of
                         []     -> errorCard
                         (x:xs) -> x
+                        
+findCardAnywhere :: CardId -> Zone -> Gamestate -> Card
+findCardAnywhere id z (Gamestate s _ _ _ _) = head (filter (\c -> getCardId c /= (CardId ((-1), (Cardname "Error")))) (map (findCard id z) s))
 
 
 {-
@@ -313,7 +343,12 @@ dealDamage :: Int -> Card -> Card
 dealDamage x (Card id n tp s pt c ac e o d t chng k tr) = Card id n tp s pt c ac e o (d+x) t chng k tr
 
 
-                                                                                       
+addKeyword :: Keyword -> Card -> Card
+addKeyword kw (Card id n tp s pt c ac e o d t chng k tr) = (Card id n tp s pt c ac e o d t chng (kw : k) tr)
+
+
+removeKeyword :: Keyword -> Card -> Card
+removeKeyword kw (Card id n tp s pt c ac e o d t chng k tr) = (Card id n tp s pt c ac e o d t chng (filter (\k' -> k' /= kw) k) tr)
 
 {-
 |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
@@ -411,6 +446,9 @@ IO Block
 messageIO :: String -> Gamestate -> IO Gamestate
 messageIO s g = do putStr s
                    return g
+                   
+noChange :: Gamestate -> IO Gamestate
+noChange = return
 
 
 findTarget :: Player -> Gamestate -> Target -> IO (Either [CardId] [Player])
@@ -422,6 +460,8 @@ findTarget owner (Gamestate s p ph pl all) t = case t of
                                                                                  return (Left [y])
                                                AllPlayer                   -> return (Right all)
                                                ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn o s))
+                                               ConditionalOwnTarget c'' z''-> do y' <- chooseCard owner c'' z'' (==owner) s
+                                                                                 return (Left [y'])
                                           
                                           
 chooseOpponent :: Player -> [Player] -> IO Player
@@ -479,13 +519,18 @@ executeTrigger (Trigger e a b act i z scp p) g = let tr = (Trigger e a b act i z
                                       
 
 
+emptyChange :: (Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure)
+emptyChange _ _ _ = Procedure noChange
+                                      
+                                      
 cast :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
 cast (PlayerInitiator p) (Left (c:cs)) Nothing = Procedure (\g -> let s = findSide g p 
                                                                       (Card id _ _ _ _ mc (Cost chk cst) _ _ _ _ _ _ _) = findCard c ZHand s in
                                                                            if chk s && (checkManaPlayer mc s) then
                                                                               do g' <- (return (manipulateResource p (payCost mc (Cost chk cst)) g))
-                                                                                 return (manipulateResource p (changeZone ZBattlefield ZHand c) g')
+                                                                                 executeAction p (CardSource c) (eventAction (Event "Resolve")) g'
                                                                               else messageIO "Insufficient Ressources " g)
+cast _ _ _ = Procedure (messageIO "Error: Invalid Cast")
                                                           
                                                                           
 
@@ -493,21 +538,43 @@ cast (PlayerInitiator p) (Left (c:cs)) Nothing = Procedure (\g -> let s = findSi
 counter :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
 counter = undefined
 
+                  --From    To   
+changeZoneAction :: Zone -> Zone -> Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+changeZoneAction zi zii _  (Left c) _ = let ac = affectZoneChange (xCardScope c) zi zii in
+                                            Procedure (\(Gamestate s t p pr all) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all) all)
+changeZoneAction zi zii _ (Right p) (Just am) = let ac = (\pl g -> affectZoneChange (xCardScope (getXpossibleCards am zi allAccept (findSide g pl))) zi zii) in
+                                                      Procedure (\g'' -> ioFold (\pl' g' -> return (manipulateResource pl' (ac pl' g') g')) g'' p)
+changeZoneAction _ _ _ _ _ = Procedure (messageIO "Error: Invalid Target for Zone Change")
 
-changeZoneAction :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
-changeZoneAction = undefined
+
+declareAttackers :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
+declareAttackers (PlayerInitiator id) (Left c) _ = let ac = affectInZone ZBattlefield (xCardScope c) (addKeyword (Keyword "Attacking")) in
+                                                       Procedure (\g -> do g' <- return (manipulateResource id ac g)
+                                                                           ioFold (\cid g'' -> executeAction id (CardSource cid) (findAction (Descriptor "Attack") (findCard cid ZBattlefield (findSide g'' id))) g'') g' c
+                                                                 )
 
 
 attack :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
-attack = undefined
-
-
+attack (CardSource c) (Right (p:ps)) _ = Procedure (\g -> (executeAction p (CardSource c) (findAction (Descriptor "DeclareBlockers") (findCardAnywhere c ZBattlefield g)) g))
+                                                                 
+                                                                 
 block :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
-block = undefined
+block (CardSource atk) (Left (blk : xs)) _ =  Procedure (resolveCombat (atk,blk))
+
+
+resolveCombat :: (CardId, CardId) -> Gamestate -> IO Gamestate
+resolveCombat (a,b) g = let (Card id n tp s (PT (Just (pwr,tgh))) c ac e o d t chng k tr) = findCardAnywhere a ZBattlefield g
+                            (Card id' n' tp' s' (PT (Just (pwr',tgh'))) c' ac' e' o' d' t' chng' k' tr') = findCardAnywhere b ZBattlefield g
+                        in do g'  <- executeAction o (CardSource id') (Action (ConditionalAllCards (checkCard id) (==ZBattlefield) (==o)) (Event "CombatDamage") (Just pwr') affectDamage) g
+                              executeAction o' (CardSource id) (Action (ConditionalAllCards (checkCard id') (==ZBattlefield) (==o')) (Event "CombatDamage") (Just pwr) affectDamage) g'
 
 
 affectDamage :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
-affectDamage = undefined
+affectDamage _ (Left c) (Just d) = let ac = affectInZone ZBattlefield (xCardScope c) (dealDamage (-d)) in
+                                       Procedure (\(Gamestate s t p pr all) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all) all)
+affectDamage _ (Right p) (Just d) = let ac = changeLife d in
+                                        Procedure (\g -> ioFold (\pl g' -> return (manipulateResource pl ac g')) g p)
+affectDamage _ _ _                = Procedure (messageIO "Error: No value while changing life")
 
 
 affectTapUntap :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure

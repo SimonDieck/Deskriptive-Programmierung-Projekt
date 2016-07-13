@@ -39,3 +39,14 @@ ioFold :: (a -> b -> IO b) -> b -> [a] -> IO b
 ioFold _ v []       = return v
 ioFold f v (x : xs) = do v' <- f x v
                          ioFold f v' xs
+                         
+
+combineConditions :: (Bool -> Bool -> Bool) -> (a -> Bool) -> (a -> Bool) -> (a -> Bool)
+combineConditions btb y z = (\x -> btb (y x) (z x))
+
+
+compoundConditionsAnd :: [(a -> Bool)] -> (a -> Bool)
+compoundConditionsAnd = foldr (combineConditions (&&)) allAccept
+
+compoundConditionsOr :: [(a -> Bool)] -> (a -> Bool)
+compoundConditionsOr = foldr (combineConditions (||)) (not.allAccept)
