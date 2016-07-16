@@ -4,6 +4,7 @@ import Prelude
 import Data.Char
 import Text.Parsec
 import Mtgmodel
+import SupportFunctions
 
 
 player :: Parsec String () Player
@@ -21,7 +22,7 @@ ignoreField = between (char '[') (char ']') (skipMany (field '{' '}' (skipMany1 
 
 
 dataSetName :: String -> Parsec String () ()
-dataSetName n = do field '"' '"' n
+dataSetName n = do field '"' '"' (string n)
                    char ':'
                    return ()
                    
@@ -36,7 +37,7 @@ irrelevantData :: Parsec String () ()
 irrelevantData = field '"' '"' (skipMany1 alphaNum)
 
 
-irrelevantDataPair :: ParsecString () ()
+irrelevantDataPair :: Parsec String () ()
 irrelevantDataPair = do irrelevantDataName
                         irrelevantData
 
@@ -53,8 +54,8 @@ learn' s = do x <- ignoreField
 
 
 earlyIdentify :: Parsec String () a -> Parsec String () a
-earlyIdentify p = do skipDataTo p
-                     p
+earlyIdentify p = lookAhead (do skipDataTo p
+                                p)
               
               
 field :: Char -> Char -> Parsec String () a -> Parsec String () a
@@ -66,8 +67,9 @@ commaSep = do char ','
               return ()
 
               
-skipDataTo :: Parsec String () () -> Parsec String () ()
-skipDataTo s = manyTill anyChar (try (lookAhead s))
+skipDataTo :: Parsec String () a -> Parsec String () ()
+skipDataTo s = do manyTill anyChar (try (lookAhead s))
+                  return ()
 
 
 dataSep :: Parsec String () a  -> Parsec String () a
@@ -106,12 +108,12 @@ permanent :: Parsec String () Card
 permanent = undefined
              
 
-cardTypeField :: Parsec String () [CardType]
+cardTypeField :: Parsec String () [Cardtype]
 cardTypeField = do dataSetName "types"
                    field '[' ']' (sepBy1 (dataSep cardType) commaSep)
                    
                    
-cardType :: Parsec String () CardType
+cardType :: Parsec String () Cardtype
 cardType = do t <- many1 letter
               case t of
                 "Creature"     -> return Creature
