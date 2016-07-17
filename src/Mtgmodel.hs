@@ -36,6 +36,8 @@ data Phase = UntapPhase | Upkeep | Draw | FirstMain | DeclareAttackers | Declare
 
 newtype Player = Id Int deriving (Eq, Show)
 
+data PlayerType = You | TOpponent | Each
+
 
 -- Card related Identifiers
 newtype Cardname = Cardname String deriving (Eq, Show)
@@ -95,7 +97,7 @@ data Trigger = Trigger  Event          Action      Bool                 Bool    
 
 newtype Procedure = Procedure (Gamestate -> IO Gamestate)
 
-data Target = Again | Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Bool) | ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
+data Target = Again | Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
 
 data Source = CardSource CardId | PlayerInitiator Player
 
@@ -113,6 +115,13 @@ standardDeclareBlockers = Action (ConditionalOwnTarget (checkUntap) (checkZone Z
 
 
 --Functions modelling change in the model
+checkPlayerType :: PlayerType -> Player -> Player -> Bool
+checkPlayerType pt p p' = case pt of
+                                You       -> p' == p
+                                TOpponent -> p' /= p
+                                Each      -> allAccept p
+
+
 identifyColours :: Manacost -> [Keyword]
 identifyColours (MCost [])     = []
 identifyColours (MCost (x:xs)) = case x of
@@ -476,10 +485,10 @@ findTarget owner (Gamestate s p ph pl all tr) t = case t of
                                                     Self                        -> return (Right [pl])
                                                     Opponent                    -> do x <- chooseOpponent owner all
                                                                                       return (Right [x])
-                                                    ConditionalTarget c' zn' o' -> do y <- chooseCard owner c' zn' o' s
+                                                    ConditionalTarget c' zn' o' -> do y <- chooseCard owner c' zn' (o' owner) s
                                                                                       return (Left [y])
                                                     AllPlayer                   -> return (Right all)
-                                                    ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn o s))
+                                                    ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn (o owner) s))
                                                     ConditionalOwnTarget c'' z''-> do y' <- chooseCard owner c'' z'' (==owner) s
                                                                                       return (Left [y'])
                                           

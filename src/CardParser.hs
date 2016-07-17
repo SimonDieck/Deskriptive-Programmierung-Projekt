@@ -239,16 +239,34 @@ addCost = undefined
 
 
 
-whosePrs :: Parsec String () (Player -> Bool)
-whosePrs = undefined
+whosePrs :: Parsec String () (Player -> Player -> Bool)
+whosePrs = (do (string "You ") <|> (string "you ") <|> (string "your ")
+               return (checkPlayerType You)) <|> (do string "Each opponent "
+                                                     return (checkPlayerType TOpponent)) <|> (do (string "Each player ") <|> (string "all ")  <|>(string "a ") 
+                                                                                                 return (checkPlayerType Each)) <|> return allAccept
 
 
 wherePrs :: Parsec String () (Zone -> Bool)
-wherePrs = undefined
+wherePrs = (do (string "Graveyard ") <|> (string "graveyard ") <|> (string "graveyards ")
+               return (checkZone ZGraveyard)) <|> (do (string "Library ") <|> (string "lybrary ")
+                                                      return (checkZone ZLibrary)) <|> (do (string "control ")
+                                                                                           return (checkZone ZBattlefield)) <|> return (not.allAccept)
 
 
 whatPrs :: Parsec String () (Card -> Bool)
-whatPrs = undefined
+whatPrs = typechecker <|> keywordchecker <|> subtypechecker
+
+
+typechecker :: Parsec String () (Card -> Bool)
+typechecker = undefined
+
+
+keywordchecker :: Parsec String () (Card -> Bool)
+keywrodchecker = undefined
+
+
+subtypechecker :: Parsec String () (Card -> Bool)
+subtypechecker = undefined
 
 
 spellAction :: Cardname -> Parsec String () Action
