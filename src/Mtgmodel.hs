@@ -5,12 +5,12 @@ import SupportFunctions
 
 
 --Recources
-data Mana = Red | Green | White | Blue | Black | Colourless deriving (Eq)
+data Mana = Red | Green | White | Blue | Black | Colourless deriving (Eq, Show)
 
 newtype Manapool = Pool [(Int,Mana)]
 
 --costs are aved as negative numbers
-newtype Manacost = MCost [(Int, Mana)]
+newtype Manacost = MCost [(Int, Mana)] deriving (Show)
 
 newtype Library = Lib [Card]
 
@@ -26,9 +26,9 @@ newtype Stack = Stack [Card]
 
 newtype Life = Life Int
 
-data Zone = ZLibrary | ZGraveyard | ZBattlefield | ZHand | ZExile deriving (Eq)
+data Zone = ZLibrary | ZGraveyard | ZBattlefield | ZHand | ZExile | ZStack | ZGlobal deriving (Eq)
 
-data Side = Side Player Library Graveyard Battlefield Hand Exile Manapool Life
+data Side = Side Player Library Graveyard Battlefield Hand Exile Stack Manapool Life
 
 
 --Gameprocedure related
@@ -38,9 +38,9 @@ newtype Player = Id Int deriving (Eq, Show)
 
 
 -- Card related Identifiers
-newtype Cardname = Cardname String deriving (Eq)
+newtype Cardname = Cardname String deriving (Eq, Show)
 
-newtype CardId = CardId (Int, Cardname) deriving (Eq)
+newtype CardId = CardId (Int, Cardname) deriving (Eq, Show)
 
 data Cardtype = Instant | Sorcery | Creature | Enchantment | Artifact | Planeswalker | Land | Legendary Cardtype | Token deriving (Eq)
 
@@ -67,8 +67,8 @@ errorCard = Card (CardId ((-1), (Cardname "Error"))) (Cardname "Error") [] [] (P
 
 
 --Gamestate
---                         All Sides  Player whose Turn it is  Current Phase  Player whose Priority it is  List of all Players
-data Gamestate = Gamestate [Side]     Player                   Phase          Player                       [Player]
+--                         All Sides  Player whose Turn it is  Current Phase  Player whose Priority it is  List of all Players   GlobalTrigger
+data Gamestate = Gamestate [Side]     Player                   Phase          Player                       [Player]              [Trigger]
 
 --currently a stub repeats endlessly
 checkWinner :: Gamestate -> Bool
@@ -82,7 +82,7 @@ data Resource = RLibrary | RGraveyard | RBattlefield | RHand | RExile | RStack |
 
 data Cost = Cost (Side -> Bool) [(Side -> Side)]
 
-data Action = Action Target Event (Maybe Int) (Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure) | ChainedAction [Action]
+data Action = Action Target Event (Maybe Int) (Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure) | ChainedAction [Action] | CondAction [Action]
 
 newtype StandardAction = Descriptor String deriving (Eq)
 
@@ -95,7 +95,7 @@ data Trigger = Trigger  Event          Action      Bool                 Bool    
 
 newtype Procedure = Procedure (Gamestate -> IO Gamestate)
 
-data Target = Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Bool) | ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
+data Target = Again | Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Bool) | ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
 
 data Source = CardSource CardId | PlayerInitiator Player
 
@@ -113,6 +113,21 @@ standardDeclareBlockers = Action (ConditionalOwnTarget (checkUntap) (checkZone Z
 
 
 --Functions modelling change in the model
+identifyColours :: Manacost -> [Keyword]
+identifyColours (MCost [])     = []
+identifyColours (MCost (x:xs)) = case x of
+                                    (_,White)      -> (Keyword "White") : identifyColours (MCost xs)
+                                    (_,Blue)       -> (Keyword "Blue") : identifyColours (MCost xs)
+                                    (_,Black)      -> (Keyword "Black") : identifyColours (MCost xs)
+                                    (_,Red)        -> (Keyword "Red") : identifyColours (MCost xs)
+                                    (_,Green)      -> (Keyword "Green") : identifyColours (MCost xs)
+                                    (_,Colourless) -> identifyColours (MCost xs)
+
+
+nameFromId :: CardId -> Cardname
+nameFromId (CardId id) = snd id
+
+
 checkZone :: Zone -> Zone -> Bool
 checkZone a b = a == b
 
@@ -143,27 +158,29 @@ identifyTrigger e i z o (Trigger e' _ _ _ i' z' _ o') = e == e' && i == i' && z 
 
 
 allAffectedTriggers :: Source -> Event -> Side -> [Trigger]
-allAffectedTriggers src ev (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _) = concatMap (\(i,j) -> affectedTriggersZone (checkTrigger src ev i) j) (zip [ZGraveyard, ZBattlefield, ZHand, ZExile] [g, b, h, e])
+allAffectedTriggers src ev (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _ _) = concatMap (\(i,j) -> affectedTriggersZone (checkTrigger src ev i) j) (zip [ZGraveyard, ZBattlefield, ZHand, ZExile] [g, b, h, e])
 
 
 addToZone :: Zone -> (Card, Side) -> Side
-addToZone z (c, (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l)) = 
+addToZone z (c, (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack s) m l)) = 
  case z of
-  ZLibrary     -> Side pl (Lib (c:lib)) (Grave g) (Btlf b) (Hand h) (Exile e) m l
-  ZGraveyard   -> Side pl (Lib lib) (Grave (c:g)) (Btlf b) (Hand h) (Exile e) m l
-  ZBattlefield -> Side pl (Lib lib) (Grave g) (Btlf (c:b)) (Hand h) (Exile e) m l
-  ZHand        -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand (c:h)) (Exile e) m l
-  ZExile       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile (c:e)) m l
+  ZLibrary     -> Side pl (Lib (c:lib)) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack s) m l
+  ZGraveyard   -> Side pl (Lib lib) (Grave (c:g)) (Btlf b) (Hand h) (Exile e) (Stack s) m l
+  ZBattlefield -> Side pl (Lib lib) (Grave g) (Btlf (c:b)) (Hand h) (Exile e) (Stack s) m l
+  ZHand        -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand (c:h)) (Exile e) (Stack s) m l
+  ZExile       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile (c:e)) (Stack s) m l
+  ZStack       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack (c:s)) m l
 
   
 removeFromZone :: CardId -> Zone -> Side -> (Card,Side)
-removeFromZone ci z (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = 
+removeFromZone ci z (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack s) m l) = 
  case z of
-  ZLibrary     -> ((head (filter (checkCard ci) lib)), Side pl (Lib (filter (not.checkCard ci) lib)) (Grave g) (Btlf b) (Hand h) (Exile e) m l)
-  ZGraveyard   -> ((head (filter (checkCard ci) g)), Side pl (Lib  lib) (Grave (filter (not.checkCard ci) g)) (Btlf b) (Hand h) (Exile e) m l)
-  ZBattlefield -> ((head (filter (checkCard ci) b)), Side pl (Lib  lib) (Grave g) (Btlf (filter (not.checkCard ci) b)) (Hand h) (Exile e) m l)
-  ZHand        -> ((head (filter (checkCard ci) h)), Side pl (Lib  lib) (Grave g) (Btlf b) (Hand (filter (not.checkCard ci) h)) (Exile e) m l)
-  ZExile       -> ((head (filter (checkCard ci) e)), Side pl (Lib  lib) (Grave g) (Btlf b) (Hand h) (Exile (filter (not.checkCard ci) e)) m l)
+  ZLibrary     -> ((head (filter (checkCard ci) lib)), Side pl (Lib (filter (not.checkCard ci) lib)) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack s) m l)
+  ZGraveyard   -> ((head (filter (checkCard ci) g)), Side pl (Lib  lib) (Grave (filter (not.checkCard ci) g)) (Btlf b) (Hand h) (Exile e) (Stack s) m l)
+  ZBattlefield -> ((head (filter (checkCard ci) b)), Side pl (Lib  lib) (Grave g) (Btlf (filter (not.checkCard ci) b)) (Hand h) (Exile e) (Stack s) m l)
+  ZHand        -> ((head (filter (checkCard ci) h)), Side pl (Lib  lib) (Grave g) (Btlf b) (Hand (filter (not.checkCard ci) h)) (Exile e) (Stack s) m l)
+  ZExile       -> ((head (filter (checkCard ci) e)), Side pl (Lib  lib) (Grave g) (Btlf b) (Hand h) (Exile (filter (not.checkCard ci) e)) (Stack s) m l)
+  ZStack       -> ((head (filter (checkCard ci) s)), Side pl (Lib  lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack (filter (not.checkCard ci) s)) m l)
 
 
 fromPool :: Manapool -> [(Int,Mana)]
@@ -198,7 +215,7 @@ affectCards scp efct c = map efct (filter scp c)
 
 
 getXpossibleCards :: Int -> Zone -> (Card -> Bool) -> Side -> [CardId]
-getXpossibleCards x z scp (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = let s = (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) in
+getXpossibleCards x z scp (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l) = let s = (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l) in
  if checkAmountZone x z scp s then
     case z of
         ZLibrary     -> map getCardId (take x (filter scp lib))
@@ -206,15 +223,16 @@ getXpossibleCards x z scp (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile 
         ZBattlefield -> map getCardId (take x (filter scp b))
         ZHand        -> map getCardId (take x (filter scp h))
         ZExile       -> map getCardId (take x (filter scp e))
+        ZStack       -> map getCardId (take x (filter scp stc))
  else []
 
 
 allZonesSatisfying :: (Zone -> Bool) -> Side -> [Card]
-allZonesSatisfying zn (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _)= concatMap (snd) (filter (\(i,j) -> zn i) (zip [ZLibrary, ZGraveyard, ZBattlefield, ZHand, ZExile] [lib, g, b, h, e]))
+allZonesSatisfying zn (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _ _)= concatMap (snd) (filter (\(i,j) -> zn i) (zip [ZLibrary, ZGraveyard, ZBattlefield, ZHand, ZExile] [lib, g, b, h, e]))
 
 
 allCardsSatisfying :: (Card -> Bool) -> (Zone -> Bool) -> (Player -> Bool) -> [Side] -> [CardId]
-allCardsSatisfying c zn o s = map getCardId (filter c (concatMap (allZonesSatisfying zn) (filter (\(Side pl _ _ _ _ _ _ _) -> o pl) s)))
+allCardsSatisfying c zn o s = map getCardId (filter c (concatMap (allZonesSatisfying zn) (filter (\(Side pl _ _ _ _ _ _ _ _) -> o pl) s)))
 
 {-
 |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
@@ -225,7 +243,7 @@ Getters
 -}
 
 findSide :: Gamestate -> Player -> Side
-findSide (Gamestate s _ _ _ _) p' =  head (filter (ownerSide p') s)
+findSide (Gamestate s _ _ _ _ _ ) p' =  head (filter (ownerSide p') s)
 
 
 getCardId :: Card -> CardId
@@ -242,7 +260,7 @@ findCard id z s = case filter (checkCard id) (allZonesSatisfying (\zb -> zb == z
                         (x:xs) -> x
                         
 findCardAnywhere :: CardId -> Zone -> Gamestate -> Card
-findCardAnywhere id z (Gamestate s _ _ _ _) = head (filter (\c -> getCardId c /= (CardId ((-1), (Cardname "Error")))) (map (findCard id z) s))
+findCardAnywhere id z (Gamestate s _ _ _ _ _ ) = head (filter (\c -> getCardId c /= (CardId ((-1), (Cardname "Error")))) (map (findCard id z) s))
 
 
 {-
@@ -291,7 +309,7 @@ Side -> Bool Functions
 
 --checks if there are x cards in zone z which fulfill condition scp
 checkAmountZone :: Int -> Zone -> (Card -> Bool) -> Side -> Bool
-checkAmountZone x z scp (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _) = 
+checkAmountZone x z scp (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _ _) = 
  case z of
   ZLibrary     -> x <= (length (filter scp lib))
   ZGraveyard   -> x <= (length (filter scp g))
@@ -301,11 +319,11 @@ checkAmountZone x z scp (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) 
   
   
 ownerSide :: Player -> Side -> Bool
-ownerSide p (Side pl _ _ _ _ _ _ _) = p == pl
+ownerSide p (Side pl _ _ _ _ _ _ _ _) = p == pl
 
 
 checkManaPlayer :: Manacost -> Side -> Bool
-checkManaPlayer cst (Side _ _ _ _ _ _ m _) = checkManaCost cst m 
+checkManaPlayer cst (Side _ _ _ _ _ _ _ m _) = checkManaCost cst m 
 
 
 {-
@@ -359,11 +377,11 @@ Side -> Side Functions
 -}
 
 manipulateManaPlayer :: (Manapool -> Manapool) -> Side -> Side
-manipulateManaPlayer ptp  (Side pl lib g b h e m l) = Side pl lib g b h e (ptp m) l
+manipulateManaPlayer ptp  (Side pl lib g b h e s m l) = Side pl lib g b h e s (ptp m) l
 
 --Main method for paying costs but still need binding functions for casting and activating abilities which will also check the cost and afterwards apply all effects
 payCost :: Manacost -> Cost -> Side -> Side
-payCost mc c s = let Side pl lib g b h e m l = payaddCost c s in Side pl lib g b h e (payManaCost mc m) l
+payCost mc c s = let Side pl lib g b h e stc m l = payaddCost c s in Side pl lib g b h e stc (payManaCost mc m) l
 
 
 payaddCost :: Cost -> Side -> Side
@@ -371,24 +389,26 @@ payaddCost (Cost _ chngs) s = applyAll chngs s
 
 
 affectZoneChange :: (Card -> Bool) -> Zone -> Zone -> Side -> Side
-affectZoneChange scp zi zii (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = let s = (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) in
+affectZoneChange scp zi zii (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l) = let s = (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l) in
  case zi of
   ZLibrary     -> foldr (changeZone zii zi) s (map getCardId (filter scp lib))
   ZGraveyard   -> foldr (changeZone zii zi) s (map getCardId (filter scp g))
   ZBattlefield -> foldr (changeZone zii zi) s (map getCardId (filter scp b))
   ZHand        -> foldr (changeZone zii zi) s (map getCardId (filter scp h))
   ZExile       -> foldr (changeZone zii zi) s (map getCardId (filter scp e))
+  ZStack       -> foldr (changeZone zii zi) s (map getCardId (filter scp stc))
 
 
 --two functions used for affecting a bunch of cards at once
 affectInZone :: Zone -> (Card -> Bool) -> (Card -> Card) -> Side -> Side
-affectInZone z scp efct (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) m l) = 
+affectInZone z scp efct (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l) = 
  case z of
-  ZLibrary     -> Side pl (Lib (affectCards scp efct lib)) (Grave g) (Btlf b) (Hand h) (Exile e) m l
-  ZGraveyard   -> Side pl (Lib lib) (Grave (affectCards scp efct g)) (Btlf b) (Hand h) (Exile e) m l
-  ZBattlefield -> Side pl (Lib lib) (Grave g) (Btlf (affectCards scp efct b)) (Hand h) (Exile e) m l
-  ZHand        -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand (affectCards scp efct h)) (Exile e) m l
-  ZExile       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile (affectCards scp efct e)) m l
+  ZLibrary     -> Side pl (Lib (affectCards scp efct lib)) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l
+  ZGraveyard   -> Side pl (Lib lib) (Grave (affectCards scp efct g)) (Btlf b) (Hand h) (Exile e) (Stack stc) m l
+  ZBattlefield -> Side pl (Lib lib) (Grave g) (Btlf (affectCards scp efct b)) (Hand h) (Exile e) (Stack stc) m l
+  ZHand        -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand (affectCards scp efct h)) (Exile e) (Stack stc) m l
+  ZExile       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile (affectCards scp efct e)) (Stack stc) m l
+  ZStack       -> Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack (affectCards scp efct stc)) m l
 
   
 -- important function which will be used with the parser
@@ -398,7 +418,7 @@ changeZone zi zii cid = (addToZone zi).(removeFromZone cid zi)
 
 -- important function which will be used with the parser
 changeLife :: Int -> Side -> Side
-changeLife c (Side pl lib g b h e m (Life l)) = Side pl lib g b h e m (Life (l+c))
+changeLife c (Side pl lib g b h e s m (Life l)) = Side pl lib g b h e s m (Life (l+c))
 
 
 removeTrigger :: Trigger -> Side -> Side
@@ -415,20 +435,20 @@ Gamestate -> Gamestate Functions
 
 
 manipulateResource :: Player -> (Side -> Side) -> Gamestate -> Gamestate
-manipulateResource pl r (Gamestate s t p pr all) = Gamestate (condMap (ownerSide pr) r s) t p pr all
+manipulateResource pl r (Gamestate s t p pr all tr) = Gamestate (condMap (ownerSide pr) r s) t p pr all tr
 
 
 setPhaseTo :: Phase -> Gamestate -> Gamestate
-setPhaseTo phs (Gamestate s p ph pl all) = Gamestate s p phs pl all
+setPhaseTo phs (Gamestate s p ph pl all tr) = Gamestate s p phs pl all tr
 
 advancePhase :: Gamestate -> Gamestate
-advancePhase (Gamestate s p ph pl all) = let g = (Gamestate s p ph pl all) in if ph == maxBound then nextTurn g else (Gamestate s p (succ ph) pl all)
+advancePhase (Gamestate s p ph pl all tr) = let g = (Gamestate s p ph pl all tr) in if ph == maxBound then nextTurn g else (Gamestate s p (succ ph) pl all tr)
 
 nextTurn :: Gamestate -> Gamestate
-nextTurn (Gamestate s p ph pl all) = let x = findNext p all in (Gamestate s x minBound x all)
+nextTurn (Gamestate s p ph pl all tr) = let x = findNext p all in (Gamestate s x minBound x all tr)
 
 changePriority :: Gamestate -> Gamestate
-changePriority (Gamestate s p ph pl all) = let x = findNext pl all in (Gamestate s p minBound x all)
+changePriority (Gamestate s p ph pl all tr) = let x = findNext pl all in (Gamestate s p minBound x all tr)
 
   
   
@@ -452,16 +472,16 @@ noChange = return
 
 
 findTarget :: Player -> Gamestate -> Target -> IO (Either [CardId] [Player])
-findTarget owner (Gamestate s p ph pl all) t = case t of
-                                               Self                        -> return (Right [pl])
-                                               Opponent                    -> do x <- chooseOpponent owner all
-                                                                                 return (Right [x])
-                                               ConditionalTarget c' zn' o' -> do y <- chooseCard owner c' zn' o' s
-                                                                                 return (Left [y])
-                                               AllPlayer                   -> return (Right all)
-                                               ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn o s))
-                                               ConditionalOwnTarget c'' z''-> do y' <- chooseCard owner c'' z'' (==owner) s
-                                                                                 return (Left [y'])
+findTarget owner (Gamestate s p ph pl all tr) t = case t of
+                                                    Self                        -> return (Right [pl])
+                                                    Opponent                    -> do x <- chooseOpponent owner all
+                                                                                      return (Right [x])
+                                                    ConditionalTarget c' zn' o' -> do y <- chooseCard owner c' zn' o' s
+                                                                                      return (Left [y])
+                                                    AllPlayer                   -> return (Right all)
+                                                    ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn o s))
+                                                    ConditionalOwnTarget c'' z''-> do y' <- chooseCard owner c'' z'' (==owner) s
+                                                                                      return (Left [y'])
                                           
                                           
 chooseOpponent :: Player -> [Player] -> IO Player
@@ -496,16 +516,31 @@ parseCard c = undefined
 
 applyProcedure :: Procedure -> Gamestate -> IO Gamestate
 applyProcedure (Procedure p) g = p g
-           
+
+
+executeWithTarget :: (Either [CardId] [Player]) -> Player -> Source -> Action -> Gamestate -> IO Gamestate
+executeWithTarget x owner s (CondAction ca)   g                               = messageIO "Parsed faulty dependencies" g
+executeWithTarget x owner s (ChainedAction a) g                               = ioFold (executeWithTarget x owner s) g a
+executeWithTarget x owner s (Action Again e str a) (Gamestate s' p ph pl all tr') = let g = (Gamestate s' p ph pl all tr')
+                                                                                        tr = (concatMap (allAffectedTriggers s e) (map (findSide g) all)) ++ (filter (checkTrigger s e ZGlobal) tr') in
+                                                                                        do g'  <- applyProcedure (a s x str) g
+                                                                                           g'' <- ioFold executeTrigger g' tr
+                                                                                           return g''
+executeWithTarget x owner s (Action t e str a) g = executeAction owner s (Action t e str a) g
+
 
 executeAction :: Player -> Source -> Action -> Gamestate -> IO Gamestate
-executeAction owner s (ChainedAction a) g                           = ioFold (executeAction owner s) g a
-executeAction owner s (Action t e str a) (Gamestate s' p ph pl all) = let g = (Gamestate s' p ph pl all) in
-                                                                          do x   <- findTarget owner g t
-                                                                             let tr = concatMap (allAffectedTriggers s e) (map (findSide g) all) in
-                                                                                 do g'  <- applyProcedure (a s x str) g
-                                                                                    g'' <- ioFold executeTrigger g' tr
-                                                                                    return g''
+executeAction owner s (CondAction ca)  (Gamestate s' p ph pl all tr')   = let (Action t e str a) = head ca 
+                                                                              g = (Gamestate s' p ph pl all tr')in
+                                                                                   do x <- findTarget owner g t
+                                                                                      ioFold (executeWithTarget x owner s) g ca
+executeAction owner s (ChainedAction a) g                               = ioFold (executeAction owner s) g a
+executeAction owner s (Action t e str a) (Gamestate s' p ph pl all tr') = let g = (Gamestate s' p ph pl all tr') in
+                                                                           do x   <- findTarget owner g t
+                                                                              let tr = (concatMap (allAffectedTriggers s e) (map (findSide g) all)) ++ (filter (checkTrigger s e ZGlobal) tr') in
+                                                                                  do g'  <- applyProcedure (a s x str) g
+                                                                                     g'' <- ioFold executeTrigger g' tr
+                                                                                     return g''
                                                                  
                                       
 
@@ -522,13 +557,15 @@ executeTrigger (Trigger e a b act i z scp p) g = let tr = (Trigger e a b act i z
 emptyChange :: (Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure)
 emptyChange _ _ _ = Procedure noChange
                                       
-                                      
+
+--add Path via Stack as well as removal after Resolving
 cast :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
 cast (PlayerInitiator p) (Left (c:cs)) Nothing = Procedure (\g -> let s = findSide g p 
                                                                       (Card id _ _ _ _ mc (Cost chk cst) _ _ _ _ _ _ _) = findCard c ZHand s in
                                                                            if chk s && (checkManaPlayer mc s) then
                                                                               do g' <- (return (manipulateResource p (payCost mc (Cost chk cst)) g))
-                                                                                 executeAction p (CardSource c) (eventAction (Event "Resolve")) g'
+                                                                                 g'' <- executeAction p (CardSource c) (Action (ConditionalOwnTarget (checkCard c) (checkZone ZHand)) (Event "Cast") Nothing (changeZoneAction ZHand ZStack)) g'
+                                                                                 executeAction p (CardSource c) (eventAction (Event "Resolve")) g''
                                                                               else messageIO "Insufficient Ressources " g)
 cast _ _ _ = Procedure (messageIO "Error: Invalid Cast")
                                                           
@@ -541,7 +578,7 @@ counter = undefined
                   --From    To   
 changeZoneAction :: Zone -> Zone -> Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
 changeZoneAction zi zii _  (Left c) _ = let ac = affectZoneChange (xCardScope c) zi zii in
-                                            Procedure (\(Gamestate s t p pr all) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all) all)
+                                            Procedure (\(Gamestate s t p pr all tr) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all tr) all)
 changeZoneAction zi zii _ (Right p) (Just am) = let ac = (\pl g -> affectZoneChange (xCardScope (getXpossibleCards am zi allAccept (findSide g pl))) zi zii) in
                                                       Procedure (\g'' -> ioFold (\pl' g' -> return (manipulateResource pl' (ac pl' g') g')) g'' p)
 changeZoneAction _ _ _ _ _ = Procedure (messageIO "Error: Invalid Target for Zone Change")
@@ -571,7 +608,7 @@ resolveCombat (a,b) g = let (Card id n tp s (PT (Just (pwr,tgh))) c ac e o d t c
 
 affectDamage :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
 affectDamage _ (Left c) (Just d) = let ac = affectInZone ZBattlefield (xCardScope c) (dealDamage (-d)) in
-                                       Procedure (\(Gamestate s t p pr all) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all) all)
+                                       Procedure (\(Gamestate s t p pr all tr) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all tr) all)
 affectDamage _ (Right p) (Just d) = let ac = changeLife d in
                                         Procedure (\g -> ioFold (\pl g' -> return (manipulateResource pl ac g')) g p)
 affectDamage _ _ _                = Procedure (messageIO "Error: No value while changing life")
@@ -610,14 +647,14 @@ while p body = loop
                           else return x
 
 turn :: Gamestate -> IO Gamestate
-turn (Gamestate s p ph pl all) = let g = (Gamestate s p ph pl all) in
-                                  ioapplyAll [untapStep, upkeepStep, drawStep, firstMainStep, combatStep, secondMainStep, endStep] g
+turn (Gamestate s p ph pl all tr) = let g = (Gamestate s p ph pl all tr) in
+                                     ioapplyAll [untapStep, upkeepStep, drawStep, firstMainStep, combatStep, secondMainStep, endStep] g
                                  
                                  
 --TODO: change to use execute action           
 untapStep :: Gamestate -> IO Gamestate
-untapStep (Gamestate s p ph pl all) =  let g = (Gamestate s p ph pl all) in
-                                           return (advancePhase (manipulateResource p (affectInZone ZBattlefield allAccept (tapuntap True)) g))
+untapStep (Gamestate s p ph pl all tr) =  let g = (Gamestate s p ph pl all tr) in
+                                              return (advancePhase (manipulateResource p (affectInZone ZBattlefield allAccept (tapuntap True)) g))
                                          
 upkeepStep :: Gamestate -> IO Gamestate
 upkeepStep g = undefined

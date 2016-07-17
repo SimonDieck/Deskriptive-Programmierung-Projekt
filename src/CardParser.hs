@@ -11,6 +11,10 @@ defaultOwner :: Player
 defaultOwner = Id 401
 
 
+standardResolveSpell :: CardId -> Action
+standardResolveSpell c = (Action (ConditionalOwnTarget (checkCard c) (checkZone ZHand)) (Event "ETG") Nothing (changeZoneAction ZStack ZGraveyard))
+
+
 data EffectSet = Set Cost [Trigger] Effect [Keyword]
 
 extractCost :: EffectSet -> Cost
@@ -148,7 +152,7 @@ spell = do mc <- skipDataToResult manaCostField
                stdac = extractEffect ef
                ac = extractCost ef
                k = extractKeywords ef
-               in return (Card id (nameFromId id) tp [] (PT Nothing) mc ac stdac defaultOwner 0 True [] k tr)
+               in return (Card id (nameFromId id) tp [] (PT Nothing) mc ac stdac defaultOwner 0 True [] (k ++ (identifyColours mc)) tr)
 
 
 permanent :: Parsec String () Card
@@ -181,12 +185,115 @@ cardidFields = do dataSetName "multiverseid"
                   
                   
 manaCostField :: Parsec String () Manacost
-manaCostField = undefined
+manaCostField = do dataSetName "manaCost"
+                   dataSep manacost
+                   
+                   
+manacost :: Parsec String () Manacost
+manacost = do x <- many1 mana
+              return (MCost (condenseCost x))
+              
+
+condenseCost :: [(Int,Mana)] -> [(Int,Mana)]
+condenseCost [] = []
+condenseCost [x] = [x]
+condenseCost ((a,m) : (b,m') : xs) = if m == m' then condenseCost ((a+b,m) : xs) else (a,m) : (condenseCost ((b,m') : xs)) 
+             
+              
+mana :: Parsec String () (Int,Mana)
+mana = try (do m <- field '{' '}' letter
+               case m of
+                 'W' -> return (1,White)
+                 'U' -> return (1,Blue)
+                 'B' -> return (1,Black)
+                 'G' -> return (1,Green)
+                 'R' -> return (1,Red)
+            ) <|> do m' <- field '{' '}' trueDigit
+                     return (m',Colourless)
+                     
+                     
+continueTextWith :: Parsec String () a -> Parsec String () a
+continueTextWith p = (do string ", "
+                         p) <|> (do string ", and "
+                                    p) <|> (do string "and "
+                                               p) <|> (do string "then "
+                                                          p)
 
 
 ruleTextFieldSpell :: CardId -> Parsec String () EffectSet
-ruleTextFieldSpell = undefined
+ruleTextFieldSpell id = do dataSetName "text"
+                           dataSep (ruleTextSpell id)
+                        
+
+ruleTextSpell :: CardId -> Parsec String () EffectSet
+ruleTextSpell id = let (CardId (x,(Cardname n))) = id in
+                     do cs <- addCost
+                        ac <- spellAction (Cardname n)
+                        let rslvTr = (Trigger (Event "Resolve") (ChainedAction [ac, standardResolveSpell id]) False True id ZStack allAccept defaultOwner) in
+                            return (Set cs [rslvTr] (Effect []) [])
 
 
 
-                  
+addCost :: Parsec String () Cost
+addCost = undefined
+
+
+
+whosePrs :: Parsec String () (Player -> Bool)
+whosePrs = undefined
+
+
+wherePrs :: Parsec String () (Zone -> Bool)
+wherePrs = undefined
+
+
+whatPrs :: Parsec String () (Card -> Bool)
+whatPrs = undefined
+
+
+spellAction :: Cardname -> Parsec String () Action
+spellAction n = commandPattern False <|> namePattern n <|> targetPattern <|> allSatisfyingPattern <|> (do ac  <- spellAction n
+                                                                                                          ac' <- spellAction n
+                                                                                                          return (ChainedAction [ac,ac']))
+               --True if the change is conditional to other effects.         
+commandPattern :: Bool -> Parsec String () Action
+commandPattern t = (try (completeCommand t)) <|> (try (simpleCommandTarget t)) <|> (try (commandTargetSpecification t))
+
+
+completeCommand :: Bool -> Parsec String () Action
+completeCommand False   = do cmnd <- (manyTill alphaNum (char ' '))
+                             case cmnd of
+                                "Prevent"  -> do skipDataTo (char '.')
+                                                 char '.'
+                                                 return (eventAction (Event "Prevent"))
+                                "Search "  -> do cnd  <- whosePrs
+                                                 cnd' <- wherePrs
+                                                 (string "for a ") <|> (string "for an ")
+                                                 cnd'' <- whatPrs
+                                                 let t = ConditionalTarget cnd'' cnd' cnd
+                                                     a = (Action t (Event "Search") Nothing emptyChange) in
+                                                     try (do a' <- continueTextWith (commandPattern True)
+                                                             return (CondAction [a,a'])) <|> (do char '.'
+                                                                                                 return a)
+                                                                                               
+                                                                                               
+simpleCommandTarget :: Bool -> Parsec String () Action
+simpleCommandTarget = undefined
+
+
+commandTargetSpecification :: Bool -> Parsec String () Action
+commandTargetSpecification = undefined
+
+
+namePattern :: Cardname -> Parsec String () Action
+namePattern = undefined
+
+
+targetPattern :: Parsec String () Action
+targetPattern = undefined
+
+
+allSatisfyingPattern :: Parsec String () Action
+allSatisfyingPattern = undefined
+
+
