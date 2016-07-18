@@ -243,7 +243,7 @@ whosePrs :: Parsec String () (Player -> Player -> Bool)
 whosePrs = (do (string "You ") <|> (string "you ") <|> (string "your ")
                return (checkPlayerType You)) <|> (do string "Each opponent "
                                                      return (checkPlayerType TOpponent)) <|> (do (string "Each player ") <|> (string "all ")  <|>(string "a ") 
-                                                                                                 return (checkPlayerType Each)) <|> return allAccept
+                                                                                                 return (checkPlayerType Each)) <|> return (\pl pl' -> allAccept pl')
 
 
 wherePrs :: Parsec String () (Zone -> Bool)
@@ -255,8 +255,8 @@ wherePrs = (do (string "Graveyard ") <|> (string "graveyard ") <|> (string "grav
 
 whatPrs :: Parsec String () (Card -> Bool)
 whatPrs = do x <- try (typechecker <|> keywordchecker <|> subtypechecker)
-            (do y <- try whatPrs
-                return combineConditions (&&) x y) <|> (return x)
+             (do y <- try whatPrs
+                 return (combineConditions (&&) x y)) <|> (return x)
 
 
 typechecker :: Parsec String () (Card -> Bool)
@@ -271,9 +271,9 @@ helpTypeChecker s c = (do (try (string (s ++ " spell "))) <|>  (try (string  (s 
                           (do try (char '.')
                               return (checkType c)) <|> (do try (string "or ")
                                                             t <- typechecker
-                                                            return (combinConditions (||) (checkType c) t)) <|> (do try (string "and ")
-                                                                                                                    t <- typechecker
-                                                                                                                    return (combinConditions (&&) (checkType c) t)))
+                                                            return (combineConditions (||) (checkType c) t)) <|> (do try (string "and ")
+                                                                                                                     t <- typechecker
+                                                                                                                     return (combineConditions (&&) (checkType c) t)))
 
 
 keywordchecker :: Parsec String () (Card -> Bool)
@@ -282,10 +282,10 @@ keywordchecker = (do try (string "non")
                      return (not.x)) <|> (do x' <- try (many1 lower)
                                              char ' '
                                              (do try (string "or ")
-                                                  k <- keywordchecker
-                                                  return (combineConditions (||) (checkKeyword (Keyword x')) k)) <|> (do try (string "and ")
-                                                                                                                         k' <- keywordchecker
-                                                                                                                         return (combineConditions (&&) (checkKeyword (Keyword x')) k')) <|> (return (checkKeyword (Keyword x')))) <|> (return allAccept)
+                                                 k <- keywordchecker
+                                                 return (combineConditions (||) (checkKeyword (Keyword x')) k)) <|> (do try (string "and ")
+                                                                                                                        k' <- keywordchecker
+                                                                                                                        return (combineConditions (&&) (checkKeyword (Keyword x')) k')) <|> (return (checkKeyword (Keyword x')))) <|> (return allAccept)
 
 
 
@@ -294,16 +294,16 @@ keywordchecker = (do try (string "non")
 
 subtypechecker :: Parsec String () (Card -> Bool)
 subtypechecker = (do try (string "non")
-                     x <- subtypeChecker
+                     x <- subtypechecker
                      return (not.x)) <|> (do y  <- try upper
                                              y' <- try (many1 lower)
                                              let x' = [y] ++ y' in
                                               do char ' '
                                                  (do try (string "or ")
                                                      s <- subtypechecker
-                                                     return (combineConditions (||) (checkSubtype (Subtype x')) s)) <|> (do try (string "and ")
+                                                     return (combineConditions (||) (checkSubType (Subtype x')) s)) <|> (do try (string "and ")
                                                                                                                             s' <- subtypechecker
-                                                                                                                            return (combineConditions (&&) (checkSubtype (Subtype x')) s')) <|> (return (checkSubtype (Subtype x)))) <|> (return allAccept)
+                                                                                                                            return (combineConditions (&&) (checkSubType (Subtype x')) s')) <|> (return (checkSubType (Subtype x')))) <|> (return allAccept)
 
 
 

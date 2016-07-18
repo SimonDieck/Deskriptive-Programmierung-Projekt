@@ -46,7 +46,7 @@ newtype CardId = CardId (Int, Cardname) deriving (Eq, Show)
 
 data Cardtype = Instant | Sorcery | Creature | Enchantment | Artifact | Planeswalker | Land | Legendary Cardtype | Token deriving (Eq)
 
-data Subtype = Creaturetype | Mountain | Forest | Plains | Island | Swamp | Aura | Equipment deriving (Eq)
+data Subtype = Creaturetype | Mountain | Forest | Plains | Island | Swamp | Aura | Equipment | Subtype String deriving (Eq)
 
 newtype Creaturetype = CreatureType String deriving (Eq)
 
@@ -615,8 +615,8 @@ block (CardSource atk) (Left (blk : xs)) _ =  Procedure (resolveCombat (atk,blk)
 resolveCombat :: (CardId, CardId) -> Gamestate -> IO Gamestate
 resolveCombat (a,b) g = let (Card id n tp s (PT (Just (pwr,tgh))) c ac e o d t chng k tr) = findCardAnywhere a ZBattlefield g
                             (Card id' n' tp' s' (PT (Just (pwr',tgh'))) c' ac' e' o' d' t' chng' k' tr') = findCardAnywhere b ZBattlefield g
-                        in do g'  <- executeAction o (CardSource id') (Action (ConditionalAllCards (checkCard id) (==ZBattlefield) (==o)) (Event "CombatDamage") (Just pwr') affectDamage) g
-                              executeAction o' (CardSource id) (Action (ConditionalAllCards (checkCard id') (==ZBattlefield) (==o')) (Event "CombatDamage") (Just pwr) affectDamage) g'
+                        in do g'  <- executeAction o (CardSource id') (Action (ConditionalAllCards (checkCard id) (==ZBattlefield) (==)) (Event "CombatDamage") (Just pwr') affectDamage) g
+                              executeAction o' (CardSource id) (Action (ConditionalAllCards (checkCard id') (==ZBattlefield) (==)) (Event "CombatDamage") (Just pwr) affectDamage) g'
 
 
 affectDamage :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
