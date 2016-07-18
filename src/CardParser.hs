@@ -216,7 +216,7 @@ continueTextWith :: Parsec String () a -> Parsec String () a
 continueTextWith p = (do string ", "
                          p) <|> (do string ", and "
                                     p) <|> (do string "and "
-                                               p) <|> (do string "then "
+                                               p) <|> (do (string "then ") <|> (string " Then ")
                                                           p)
 
 
@@ -247,33 +247,72 @@ whosePrs = (do (string "You ") <|> (string "you ") <|> (string "your ")
 
 
 wherePrs :: Parsec String () (Zone -> Bool)
-wherePrs = (do (string "Graveyard ") <|> (string "graveyard ") <|> (string "graveyards ")
-               return (checkZone ZGraveyard)) <|> (do (string "Library ") <|> (string "lybrary ")
-                                                      return (checkZone ZLibrary)) <|> (do (string "control ")
+wherePrs = (do (string "Graveyard ") <|> (string "graveyard ") <|> (string "graveyards ") <|> (string "graveyard") <|> (string "graveyards")
+               return (checkZone ZGraveyard)) <|> (do (string "Library ") <|> (string "library ") <|> (string "library") 
+                                                      return (checkZone ZLibrary)) <|> (do (string "control ") <|> (string "control")
                                                                                            return (checkZone ZBattlefield)) <|> return (not.allAccept)
 
 
 whatPrs :: Parsec String () (Card -> Bool)
-whatPrs = typechecker <|> keywordchecker <|> subtypechecker
+whatPrs = do x <- try (typechecker <|> keywordchecker <|> subtypechecker)
+            (do y <- try whatPrs
+                return combineConditions (&&) x y) <|> (return x)
 
 
 typechecker :: Parsec String () (Card -> Bool)
-typechecker = undefined
+typechecker = (do try (string "non")
+                  x <- typechecker
+                  return (not.x)) <|> (try (helpTypeChecker "creature" Creature)) <|> (try (helpTypeChecker "instant" Instant)) <|> (try (helpTypeChecker "sorcery" Sorcery)) <|> (try (helpTypeChecker "artifact" Artifact)) <|> (try (helpTypeChecker "enchantment" Enchantment)) <|> (try (helpTypeChecker "land" Land)) <|> (return allAccept)
+
+
+
+helpTypeChecker :: String -> Cardtype -> Parsec String () (Card -> Bool)
+helpTypeChecker s c = (do (try (string (s ++ " spell "))) <|>  (try (string  (s ++ " spell"))) <|> (try (string (s ++" "))) <|> (try (string s))
+                          (do try (char '.')
+                              return (checkType c)) <|> (do try (string "or ")
+                                                            t <- typechecker
+                                                            return (combinConditions (||) (checkType c) t)) <|> (do try (string "and ")
+                                                                                                                    t <- typechecker
+                                                                                                                    return (combinConditions (&&) (checkType c) t)))
 
 
 keywordchecker :: Parsec String () (Card -> Bool)
-keywrodchecker = undefined
+keywordchecker = (do try (string "non")
+                     x <- keywordchecker
+                     return (not.x)) <|> (do x' <- try (many1 lower)
+                                             char ' '
+                                             (do try (string "or ")
+                                                  k <- keywordchecker
+                                                  return (combineConditions (||) (checkKeyword (Keyword x')) k)) <|> (do try (string "and ")
+                                                                                                                         k' <- keywordchecker
+                                                                                                                         return (combineConditions (&&) (checkKeyword (Keyword x')) k')) <|> (return (checkKeyword (Keyword x')))) <|> (return allAccept)
+
+
+
+
 
 
 subtypechecker :: Parsec String () (Card -> Bool)
-subtypechecker = undefined
+subtypechecker = (do try (string "non")
+                     x <- subtypeChecker
+                     return (not.x)) <|> (do y  <- try upper
+                                             y' <- try (many1 lower)
+                                             let x' = [y] ++ y' in
+                                              do char ' '
+                                                 (do try (string "or ")
+                                                     s <- subtypechecker
+                                                     return (combineConditions (||) (checkSubtype (Subtype x')) s)) <|> (do try (string "and ")
+                                                                                                                            s' <- subtypechecker
+                                                                                                                            return (combineConditions (&&) (checkSubtype (Subtype x')) s')) <|> (return (checkSubtype (Subtype x)))) <|> (return allAccept)
+
 
 
 spellAction :: Cardname -> Parsec String () Action
 spellAction n = commandPattern False <|> namePattern n <|> targetPattern <|> allSatisfyingPattern <|> (do ac  <- spellAction n
                                                                                                           ac' <- spellAction n
                                                                                                           return (ChainedAction [ac,ac']))
-               --True if the change is conditional to other effects.         
+
+                  --True if the change is conditional to other effects.         
 commandPattern :: Bool -> Parsec String () Action
 commandPattern t = (try (completeCommand t)) <|> (try (simpleCommandTarget t)) <|> (try (commandTargetSpecification t))
 

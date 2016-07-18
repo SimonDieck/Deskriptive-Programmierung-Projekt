@@ -294,6 +294,10 @@ checkSubType :: Subtype -> Card -> Bool
 checkSubType ct (Card _ _ _ (x:xs) _ _ _ _ _ _ _ _ _ _) = if x == ct then True else findA ct xs
 
 
+checkKeyword :: Keyword -> Card -> Bool
+checkKeyword k (Card _ _ _ _ _ _ _ _ _ _ _ _ x _) = findA k x
+
+
 checkUntap :: Card -> Bool
 checkUntap (Card _ _ _ _ _ _ _ _ _ _ t _ _ _) = t
 
