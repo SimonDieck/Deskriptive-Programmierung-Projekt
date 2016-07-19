@@ -16,7 +16,7 @@ data Mana = Red | Green | White | Blue | Black | Colourless deriving (Eq, Show)
 {--
 Storage for active unspend Mana a player has
 --}
-newtype Manapool = Pool [(Int,Mana)]
+newtype Manapool = Pool [(Int,Mana)] deriving (Show)
 
 
 {--
@@ -37,23 +37,23 @@ The Stack is were every card is placed when it is played from ones hand. From th
 --}
 data Zone = ZLibrary | ZGraveyard | ZBattlefield | ZHand | ZExile | ZStack | ZGlobal deriving (Eq)
 
-newtype Library = Lib [Card]
+newtype Library = Lib [Card] deriving (Show)
 
-newtype Graveyard = Grave [Card]
+newtype Graveyard = Grave [Card] deriving (Show)
 
-newtype Battlefield = Btlf [Card]
+newtype Battlefield = Btlf [Card] deriving (Show)
 
-newtype Hand = Hand [Card]
+newtype Hand = Hand [Card] deriving (Show)
 
-newtype Exile = Exile [Card]
+newtype Exile = Exile [Card] deriving (Show)
 
-newtype Stack = Stack [Card]
+newtype Stack = Stack [Card] deriving (Show)
 
 
 {--
 Starts at 20 if it hits 0 a player loses the game. Is also used as ressource to pay fro some spells and effects.
 --}
-newtype Life = Life Int
+newtype Life = Life Int deriving (Eq, Show)
 
 --A player of the game
 newtype Player = Id Int deriving (Eq, Show)
@@ -67,7 +67,7 @@ Each = all Players
 data PlayerType = You | TOpponent | Each
 
 --Combination of everything before culminates in a side of a player
-data Side = Side Player Library Graveyard Battlefield Hand Exile Stack Manapool Life
+data Side = Side Player Library Graveyard Battlefield Hand Exile Stack Manapool Life deriving (Show)
 
 
 --Phases that are progressed through every turn
@@ -99,7 +99,7 @@ newtype PowerToughness = PT (Maybe (Int, Int))
 data Keyword = Keyword String deriving (Eq)
 
 --Possible events that can be asked by triggers. Listed under Actions at: http://mtgsalvation.gamepedia.com/Evergreen
-data Event = Event String deriving (Eq)
+data Event = Event String deriving (Eq, Show)
 
 {--
 Changes are functions that can revert a change that was previously conducted by an other cards effect. This is necessary as for example static changes to Power and Toughness disappear when teir source changes zones.
@@ -111,6 +111,8 @@ data Change = Change CardId (Card -> Card)
 --               Id     Name     Type       Subtype   Power/ Toughness  Cost     Additional Cost  Effect Owner   Damage Untapped = True  Active Changes affecting the card  Keywords
 data Card = Card CardId Cardname [Cardtype] [Subtype] PowerToughness    Manacost Cost             Effect Player  Int    Bool             [Change]                           [Keyword]  [Trigger]
 
+instance Show Card where
+    show (Card id _ _ _ _ _ _ _ _ _ _ _ _ _) = show id
 
 {--
 used for error handling in Card -> Card functions
@@ -122,6 +124,11 @@ errorCard = Card (CardId ((-1), (Cardname "Error"))) (Cardname "Error") [] [] (P
 --Gamestate
 --                         All Sides  Player whose Turn it is  Current Phase  Player whose Priority it is  List of all Players   GlobalTrigger
 data Gamestate = Gamestate [Side]     Player                   Phase          Player                       [Player]              [Trigger]
+
+
+instance Show Gamestate where
+    show (Gamestate s _ _ _ _ _) = show s
+
 
 --currently a stub repeats endlessly
 checkWinner :: Gamestate -> Bool
@@ -168,6 +175,11 @@ Certain Triggers are only active in certain zones. This can be used to prevent a
 --                      Trigger        Consequence OneTime or Permanent Active   Origin Zone in which the Trigger will activate Scope to check if the Source satisfies certain conditions Owner of the Trigger
 data Trigger = Trigger  Event          Action      Bool                 Bool     CardId Zone                                    (Source -> Bool)                                          Player
 
+
+instance Show Trigger where
+    show (Trigger e _ _ _ _ _ _ _) = show e
+
+
 newtype Procedure = Procedure (Gamestate -> IO Gamestate)
 
 {--
@@ -182,7 +194,7 @@ CondtionalOwnTarget - Replaced by the extension of the third condition in condit
 --}
 data Target = Again | Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
 
-data Source = CardSource CardId | PlayerInitiator Player
+data Source = CardSource CardId | PlayerInitiator Player deriving (Show)
 
 --List of implicit cardtype actions. These can be replaced by more specific conditions. For example a creature with vigilance wouldn't be tapped if it attacked.
 data Effect = Effect [(StandardAction, Action)] 
@@ -257,7 +269,7 @@ identifyTrigger e i z o (Trigger e' _ _ _ i' z' _ o') = e == e' && i == i' && z 
 
 
 allAffectedTriggers :: Source -> Event -> Side -> [Trigger]
-allAffectedTriggers src ev (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _ _) = concatMap (\(i,j) -> affectedTriggersZone (checkTrigger src ev i) j) (zip [ZGraveyard, ZBattlefield, ZHand, ZExile] [g, b, h, e])
+allAffectedTriggers src ev (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack s) _ _) = concatMap (\(i,j) -> affectedTriggersZone (checkTrigger src ev i) j) (zip [ZGraveyard, ZBattlefield, ZHand, ZExile, ZStack] [g, b, h, e, s])
 
 
 
@@ -345,11 +357,15 @@ Getters
 -}
 
 findSide :: Gamestate -> Player -> Side
-findSide (Gamestate s _ _ _ _ _ ) p' =  head (filter (ownerSide p') s)
+findSide (Gamestate s _ _ _ all _ ) p' = if findA p' all then head (filter (ownerSide p') s) else head s
 
 
 getCardId :: Card -> CardId
 getCardId (Card id _ _ _ _ _ _ _ _ _ _ _ _ _) = id
+
+
+getLife :: Side -> Life
+getLife (Side _ _ _ _ _ _ _ _ l) = l
 
 
 getOwner :: Card -> Player
@@ -504,12 +520,12 @@ payaddCost (Cost _ chngs) s = applyAll chngs s
 affectZoneChange :: (Card -> Bool) -> Zone -> Zone -> Side -> Side
 affectZoneChange scp zi zii (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l) = let s = (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack stc) m l) in
  case zi of
-  ZLibrary     -> foldr (changeZone zii zi) s (map getCardId (filter scp lib))
-  ZGraveyard   -> foldr (changeZone zii zi) s (map getCardId (filter scp g))
-  ZBattlefield -> foldr (changeZone zii zi) s (map getCardId (filter scp b))
-  ZHand        -> foldr (changeZone zii zi) s (map getCardId (filter scp h))
-  ZExile       -> foldr (changeZone zii zi) s (map getCardId (filter scp e))
-  ZStack       -> foldr (changeZone zii zi) s (map getCardId (filter scp stc))
+  ZLibrary     -> foldr (changeZone zi zii) s (map getCardId (filter scp lib))
+  ZGraveyard   -> foldr (changeZone zi zii) s (map getCardId (filter scp g))
+  ZBattlefield -> foldr (changeZone zi zii) s (map getCardId (filter scp b))
+  ZHand        -> foldr (changeZone zi zii) s (map getCardId (filter scp h))
+  ZExile       -> foldr (changeZone zi zii) s (map getCardId (filter scp e))
+  ZStack       -> foldr (changeZone zi zii) s (map getCardId (filter scp stc))
 
 
 --two functions used for affecting a bunch of cards at once
@@ -526,7 +542,7 @@ affectInZone z scp efct (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e)
   
 -- important function which will be used with the parser
 changeZone :: Zone -> Zone -> CardId -> Side -> Side
-changeZone zi zii cid = (addToZone zi).(removeFromZone cid zi)
+changeZone zi zii cid = (addToZone zii).(removeFromZone cid zi)
 
 
 -- important function which will be used with the parser
@@ -651,9 +667,12 @@ executeAction owner s (CondAction ca)  (Gamestate s' p ph pl all tr')   = let (A
 executeAction owner s (ChainedAction a) g                               = ioFold (executeAction owner s) g a
 executeAction owner s (Action t e str a) (Gamestate s' p ph pl all tr') = let g = (Gamestate s' p ph pl all tr') in
                                                                            do x   <- findTarget owner g t
+                                                                              putStrLn ("Found Target: " ++ (show x))
                                                                               let tr = (concatMap (allAffectedTriggers s e) (map (findSide g) all)) ++ (filter (checkTrigger s e ZGlobal) tr') in
                                                                                   do g'  <- applyProcedure (a s x str) g
+                                                                                     putStrLn ("Applied Procedure, executing Triggers for Event " ++ (show e) ++ " with Triggers " ++ (show tr) ++ " from " ++ (show s))
                                                                                      g'' <- ioFold executeTrigger g' tr
+                                                                                     putStrLn ("All Triggers applied for Event: " ++ (show e))
                                                                                      return g''
                                                                  
                                       
@@ -678,7 +697,9 @@ cast (PlayerInitiator p) (Left (c:cs)) Nothing = Procedure (\g -> let s = findSi
                                                                       (Card id _ _ _ _ mc (Cost chk cst) _ _ _ _ _ _ _) = findCard c ZHand s in
                                                                            if chk s && (checkManaPlayer mc s) then
                                                                               do g' <- (return (manipulateResource p (payCost mc (Cost chk cst)) g))
-                                                                                 g'' <- executeAction p (CardSource c) (Action (ConditionalOwnTarget (checkCard c) (checkZone ZHand)) (Event "Cast") Nothing (changeZoneAction ZHand ZStack)) g'
+                                                                                 putStrLn ("Start Cast of: " ++ (show c))
+                                                                                 g'' <- executeAction p (CardSource c) (Action (ConditionalAllCards (checkCard c) (checkZone ZHand) (checkPlayerType You)) (Event "Cast") Nothing (changeZoneAction ZHand ZStack)) g'
+                                                                                 putStrLn ("Call Resolve Trigger")
                                                                                  executeAction p (CardSource c) (eventAction (Event "Resolve")) g''
                                                                               else messageIO "Insufficient Ressources " g)
 cast _ _ _ = Procedure (messageIO "Error: Invalid Cast")
@@ -693,7 +714,10 @@ counter = undefined
                   --From    To   
 changeZoneAction :: Zone -> Zone -> Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
 changeZoneAction zi zii _  (Left c) _ = let ac = affectZoneChange (xCardScope c) zi zii in
-                                            Procedure (\(Gamestate s t p pr all tr) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all tr) all)
+                                            Procedure (\(Gamestate s t p pr all tr) -> do putStrLn ("Change Zone of: " ++ (show c))
+                                                                                          gmn <- ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all tr) all
+                                                                                          putStrLn ("Successfull change of Zones: " ++ (show c))
+                                                                                          return gmn)
 changeZoneAction zi zii _ (Right p) (Just am) = let ac = (\pl g -> affectZoneChange (xCardScope (getXpossibleCards am zi allAccept (findSide g pl))) zi zii) in
                                                       Procedure (\g'' -> ioFold (\pl' g' -> return (manipulateResource pl' (ac pl' g') g')) g'' p)
 changeZoneAction _ _ _ _ _ = Procedure (messageIO "Error: Invalid Target for Zone Change")
@@ -725,7 +749,8 @@ affectDamage :: Source -> (Either [CardId] [Player]) -> (Maybe Int) -> Procedure
 affectDamage _ (Left c) (Just d) = let ac = affectInZone ZBattlefield (xCardScope c) (dealDamage (-d)) in
                                        Procedure (\(Gamestate s t p pr all tr) -> ioFold (\pl g -> return (manipulateResource pl ac g)) (Gamestate s t p pr all tr) all)
 affectDamage _ (Right p) (Just d) = let ac = changeLife d in
-                                        Procedure (\g -> ioFold (\pl g' -> return (manipulateResource pl ac g')) g p)
+                                        Procedure (\g -> do putStr ("Change Life of: " ++ (show p))
+                                                            ioFold (\pl g' -> return (manipulateResource pl ac g')) g p)
 affectDamage _ _ _                = Procedure (messageIO "Error: No value while changing life")
 
 
