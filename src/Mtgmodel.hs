@@ -67,7 +67,10 @@ Each = all Players
 data PlayerType = You | TOpponent | Each
 
 --Combination of everything before culminates in a side of a player
-data Side = Side Player Library Graveyard Battlefield Hand Exile Stack Manapool Life deriving (Show)
+data Side = Side Player Library Graveyard Battlefield Hand Exile Stack Manapool Life
+
+instance Show Side where
+    show (Side pl lib g b h e s m l) = (show pl) ++ "\n" ++ (show lib) ++ "\n" ++ (show g) ++ "\n" ++ (show h) ++ "\n" ++ (show e) ++ "\n" ++ (show s) ++ "\n" ++ (show m) ++ "\n" ++ (show l) ++ "\n"
 
 
 --Phases that are progressed through every turn
@@ -86,7 +89,7 @@ Subtypes are used to target only a specific subset of cards or specify the effec
 --}
 data Cardtype = Instant | Sorcery | Creature | Enchantment | Artifact | Planeswalker | Land | Legendary Cardtype | Token deriving (Eq)
 
-data Subtype = Creaturetype | Mountain | Forest | Plains | Island | Swamp | Aura | Equipment | Subtype String deriving (Eq)
+data Subtype = Sub Creaturetype | Mountain | Forest | Plains | Island | Swamp | Aura | Equipment | Subtype String deriving (Eq)
 
 newtype Creaturetype = CreatureType String deriving (Eq)
 
@@ -192,7 +195,7 @@ AllPlayer - All players are affected
 ConditionalAllCards - All cards satisfying all three conditions are affected
 CondtionalOwnTarget - Replaced by the extension of the third condition in conditionalTarget
 --}
-data Target = Again | Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
+data Target = Again | Self | Opponent | ConditionalTarget (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | AllPlayer | ConditionalAllCards (Card -> Bool) (Zone -> Bool) (Player -> Player -> Bool) | ConditionalAllPlayer (Player -> Player -> Bool) |ConditionalOwnTarget (Card -> Bool) (Zone -> Bool)
 
 data Source = CardSource CardId | PlayerInitiator Player deriving (Show)
 
@@ -341,7 +344,7 @@ getXpossibleCards x z scp (Side pl (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile 
 
 
 allZonesSatisfying :: (Zone -> Bool) -> Side -> [Card]
-allZonesSatisfying zn (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) _ _ _)= concatMap (snd) (filter (\(i,j) -> zn i) (zip [ZLibrary, ZGraveyard, ZBattlefield, ZHand, ZExile] [lib, g, b, h, e]))
+allZonesSatisfying zn (Side _ (Lib lib) (Grave g) (Btlf b) (Hand h) (Exile e) (Stack s) _ _)= concatMap (snd) (filter (\(i,j) -> zn i) (zip [ZLibrary, ZGraveyard, ZBattlefield, ZHand, ZExile, ZStack] [lib, g, b, h, e, s]))
 
 
 allCardsSatisfying :: (Card -> Bool) -> (Zone -> Bool) -> (Player -> Bool) -> [Side] -> [CardId]
@@ -565,7 +568,7 @@ manipulating the broader aspects of the game like whose turn it is and who curre
 
 
 manipulateResource :: Player -> (Side -> Side) -> Gamestate -> Gamestate
-manipulateResource pl r (Gamestate s t p pr all tr) = Gamestate (condMap (ownerSide pr) r s) t p pr all tr
+manipulateResource pl r (Gamestate s t p pr all tr) = Gamestate (condMap (ownerSide pl) r s) t p pr all tr
 
 
 setPhaseTo :: Phase -> Gamestate -> Gamestate
@@ -612,6 +615,7 @@ findTarget owner (Gamestate s p ph pl all tr) t = case t of
                                                     ConditionalAllCards c zn o  -> return (Left (allCardsSatisfying c zn (o owner) s))
                                                     ConditionalOwnTarget c'' z''-> do y' <- chooseCard owner c'' z'' (==owner) s
                                                                                       return (Left [y'])
+                                                    ConditionalAllPlayer o''    -> return (Right (filter (o'' owner) all))
                                           
                                           
 chooseOpponent :: Player -> [Player] -> IO Player
