@@ -12,7 +12,7 @@ defaultOwner = Id 401
 
 
 standardResolveSpell :: CardId -> Action
-standardResolveSpell c = (Action (ConditionalOwnTarget (checkCard c) (checkZone ZHand)) (Event "ETG") Nothing (changeZoneAction ZStack ZGraveyard))
+standardResolveSpell c = Action (ConditionalOwnTarget (checkCard c) (checkZone ZHand)) (Event "ETG") Nothing (changeZoneAction ZStack ZGraveyard)
 
 
 data EffectSet = Set Cost [Trigger] Effect [Keyword]
@@ -43,8 +43,8 @@ trueInt :: Parsec String () Int
 trueInt = consecutiveInt 0
 
 consecutiveInt :: Int -> Parsec String () Int
-consecutiveInt i = (try (do i' <- trueDigit
-                            consecutiveInt (i*10+i') )) <|> return i 
+consecutiveInt i = try (do i' <- trueDigit
+                           consecutiveInt (i*10+i') ) <|> return i 
  
  
 ignoreField :: Parsec String () ()
@@ -116,7 +116,7 @@ skipDataToResult s = do manyTill anyChar (try (lookAhead s))
                   
 
 dataSep :: Parsec String () a  -> Parsec String () a
-dataSep p = field '"' '"' p
+dataSep = field '"' '"' 
 
 
 m10Set :: Parsec String () [Card]
@@ -133,7 +133,7 @@ card :: Parsec String () Card
 card = do t <- earlyIdentify cardTypeField
           if findA Creature t
              then creature
-             else if (findA Instant t) || (findA Sorcery t)
+             else if findA Instant t || findA Sorcery t
                      then spell
                      else permanent
              
@@ -152,7 +152,7 @@ spell = do mc <- skipDataToResult manaCostField
                stdac = extractEffect ef
                ac = extractCost ef
                k = extractKeywords ef
-               in return (Card id (nameFromId id) tp [] (PT Nothing) mc ac stdac defaultOwner 0 True [] (k ++ (identifyColours mc)) tr)
+               in return (Card id (nameFromId id) tp [] (PT Nothing) mc ac stdac defaultOwner 0 True [] (k ++ identifyColours mc) tr)
 
 
 permanent :: Parsec String () Card
@@ -181,7 +181,7 @@ cardidFields = do dataSetName "multiverseid"
                   char ','
                   dataSetName "name"
                   n <- dataSep (many1 textChars)
-                  return (CardId (x,(Cardname n)))
+                  return (CardId (x,Cardname n))
                   
                   
 manaCostField :: Parsec String () Manacost
@@ -197,7 +197,7 @@ manacost = do x <- many1 mana
 condenseCost :: [(Int,Mana)] -> [(Int,Mana)]
 condenseCost [] = []
 condenseCost [x] = [x]
-condenseCost ((a,m) : (b,m') : xs) = if m == m' then condenseCost ((a+b,m) : xs) else (a,m) : (condenseCost ((b,m') : xs)) 
+condenseCost ((a,m) : (b,m') : xs) = if m == m' then condenseCost ((a+b,m) : xs) else (a,m) : condenseCost ((b,m') : xs)
              
               
 mana :: Parsec String () (Int,Mana)
@@ -216,7 +216,7 @@ continueTextWith :: Parsec String () a -> Parsec String () a
 continueTextWith p = (do string ", "
                          p) <|> (do string ", and "
                                     p) <|> (do string "and "
-                                               p) <|> (do (string "then ") <|> (string " Then ")
+                                               p) <|> (do string "then " <|> string " Then "
                                                           p)
 
 
@@ -226,10 +226,10 @@ ruleTextFieldSpell id = do dataSetName "text"
                         
 
 ruleTextSpell :: CardId -> Parsec String () EffectSet
-ruleTextSpell id = let (CardId (x,(Cardname n))) = id in
+ruleTextSpell id = let (CardId (x,Cardname n)) = id in
                      do cs <- addCost
                         ac <- spellAction (Cardname n)
-                        let rslvTr = (Trigger (Event "Resolve") (ChainedAction [ac, standardResolveSpell id]) False True id ZStack allAccept defaultOwner) in
+                        let rslvTr = Trigger (Event "Resolve") (ChainedAction [ac, standardResolveSpell id]) False True id ZStack allAccept defaultOwner in
                             return (Set cs [rslvTr] (Effect []) [])
 
 
@@ -240,40 +240,40 @@ addCost = undefined
 
 
 whosePrs :: Parsec String () (Player -> Player -> Bool)
-whosePrs = (do (string "You ") <|> (string "you ") <|> (string "your ")
+whosePrs = (do string "You " <|> string "you " <|> string "your "
                return (checkPlayerType You)) <|> (do string "Each opponent "
-                                                     return (checkPlayerType TOpponent)) <|> (do (string "Each player ") <|> (string "all ")  <|>(string "a ") 
+                                                     return (checkPlayerType TOpponent)) <|> (do string "Each player " <|> string "all "  <|> string "a " 
                                                                                                  return (checkPlayerType Each)) <|> return (\pl pl' -> allAccept pl')
 
 
 wherePrs :: Parsec String () (Zone -> Bool)
-wherePrs = (do (string "Graveyard ") <|> (string "graveyard ") <|> (string "graveyards ") <|> (string "graveyard") <|> (string "graveyards")
-               return (checkZone ZGraveyard)) <|> (do (string "Library ") <|> (string "library ") <|> (string "library") 
-                                                      return (checkZone ZLibrary)) <|> (do (string "control ") <|> (string "control")
+wherePrs = (do string "Graveyard " <|> string "graveyard " <|> string "graveyards " <|> string "graveyard" <|> string "graveyards"
+               return (checkZone ZGraveyard)) <|> (do string "Library " <|> string "library " <|> string "library" 
+                                                      return (checkZone ZLibrary)) <|> (do string "control " <|> string "control"
                                                                                            return (checkZone ZBattlefield)) <|> return (not.allAccept)
 
 
 whatPrs :: Parsec String () (Card -> Bool)
 whatPrs = do x <- try (typechecker <|> keywordchecker <|> subtypechecker)
              (do y <- try whatPrs
-                 return (combineConditions (&&) x y)) <|> (return x)
+                 return (combineConditions (&&) x y)) <|> return x
 
 
 typechecker :: Parsec String () (Card -> Bool)
 typechecker = (do try (string "non")
                   x <- typechecker
-                  return (not.x)) <|> (try (helpTypeChecker "creature" Creature)) <|> (try (helpTypeChecker "instant" Instant)) <|> (try (helpTypeChecker "sorcery" Sorcery)) <|> (try (helpTypeChecker "artifact" Artifact)) <|> (try (helpTypeChecker "enchantment" Enchantment)) <|> (try (helpTypeChecker "land" Land)) <|> (return allAccept)
+                  return (not.x)) <|> try (helpTypeChecker "creature" Creature) <|> try (helpTypeChecker "instant" Instant) <|> try (helpTypeChecker "sorcery" Sorcery) <|> try (helpTypeChecker "artifact" Artifact) <|> try (helpTypeChecker "enchantment" Enchantment) <|> try (helpTypeChecker "land" Land) <|> return allAccept
 
 
 
 helpTypeChecker :: String -> Cardtype -> Parsec String () (Card -> Bool)
-helpTypeChecker s c = (do (try (string (s ++ " spell "))) <|>  (try (string  (s ++ " spell"))) <|> (try (string (s ++" "))) <|> (try (string s))
-                          (do try (char '.')
-                              return (checkType c)) <|> (do try (string "or ")
-                                                            t <- typechecker
-                                                            return (combineConditions (||) (checkType c) t)) <|> (do try (string "and ")
-                                                                                                                     t <- typechecker
-                                                                                                                     return (combineConditions (&&) (checkType c) t)))
+helpTypeChecker s c = do try (string (s ++ " spell ")) <|>  try (string  (s ++ " spell")) <|> try (string (s ++" ")) <|> try (string s)
+                         (do try (char '.')
+                             return (checkType c)) <|> (do try (string "or ")
+                                                           t <- typechecker
+                                                           return (combineConditions (||) (checkType c) t)) <|> (do try (string "and ")
+                                                                                                                    t <- typechecker
+                                                                                                                    return (combineConditions (&&) (checkType c) t))
 
 
 keywordchecker :: Parsec String () (Card -> Bool)
@@ -285,7 +285,7 @@ keywordchecker = (do try (string "non")
                                                  k <- keywordchecker
                                                  return (combineConditions (||) (checkKeyword (Keyword x')) k)) <|> (do try (string "and ")
                                                                                                                         k' <- keywordchecker
-                                                                                                                        return (combineConditions (&&) (checkKeyword (Keyword x')) k')) <|> (return (checkKeyword (Keyword x')))) <|> (return allAccept)
+                                                                                                                        return (combineConditions (&&) (checkKeyword (Keyword x')) k')) <|> return (checkKeyword (Keyword x'))) <|> return allAccept
 
 
 
@@ -297,13 +297,13 @@ subtypechecker = (do try (string "non")
                      x <- subtypechecker
                      return (not.x)) <|> (do y  <- try upper
                                              y' <- try (many1 lower)
-                                             let x' = [y] ++ y' in
+                                             let x' = y : y' in
                                               do char ' '
                                                  (do try (string "or ")
                                                      s <- subtypechecker
                                                      return (combineConditions (||) (checkSubType (Subtype x')) s)) <|> (do try (string "and ")
                                                                                                                             s' <- subtypechecker
-                                                                                                                            return (combineConditions (&&) (checkSubType (Subtype x')) s')) <|> (return (checkSubType (Subtype x')))) <|> (return allAccept)
+                                                                                                                            return (combineConditions (&&) (checkSubType (Subtype x')) s')) <|> return (checkSubType (Subtype x'))) <|> return allAccept
 
 
 
@@ -314,21 +314,21 @@ spellAction n = commandPattern False <|> namePattern n <|> targetPattern <|> all
 
                   --True if the change is conditional to other effects.         
 commandPattern :: Bool -> Parsec String () Action
-commandPattern t = (try (completeCommand t)) <|> (try (simpleCommandTarget t)) <|> (try (commandTargetSpecification t))
+commandPattern t = try (completeCommand t) <|> try (simpleCommandTarget t) <|> try (commandTargetSpecification t)
 
 
 completeCommand :: Bool -> Parsec String () Action
-completeCommand False   = do cmnd <- (manyTill alphaNum (char ' '))
+completeCommand False   = do cmnd <- manyTill alphaNum (char ' ')
                              case cmnd of
                                 "Prevent"  -> do skipDataTo (char '.')
                                                  char '.'
                                                  return (eventAction (Event "Prevent"))
                                 "Search "  -> do cnd  <- whosePrs
                                                  cnd' <- wherePrs
-                                                 (string "for a ") <|> (string "for an ")
+                                                 string "for a " <|> string "for an "
                                                  cnd'' <- whatPrs
                                                  let t = ConditionalTarget cnd'' cnd' cnd
-                                                     a = (Action t (Event "Search") Nothing emptyChange) in
+                                                     a = Action t (Event "Search") Nothing emptyChange in
                                                      try (do a' <- continueTextWith (commandPattern True)
                                                              return (CondAction [a,a'])) <|> (do char '.'
                                                                                                  return a)
